@@ -1,0 +1,14 @@
+{
+  "uuid": "gate@mawoodmain.github.io",
+  "name": "GATE",
+  "description": "Live test equipment readings from Gnome Automatic Test Equipment",
+  "shell-version": [
+    "46",
+    "47",
+    "48",
+    "49",
+    "50"
+  ],
+  "url": "https://github.com/MAWoodMain/GATE",
+  "version": 3
+}

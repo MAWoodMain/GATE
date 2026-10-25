@@ -1,0 +1,107 @@
+name: Build and release
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Stable release bump (main only)
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+permissions:
+  contents: read
+concurrency:
+  group: gate-deb-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: /usr/bin/python3 -m unittest discover -s tests -v
+      - run: /usr/bin/python3 -m compileall -q gate scripts
+      - run: bash -n install.sh
+      - run: node --input-type=module --check < extension/extension.js
+  desktop:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-gi gir1.2-gtk-4.0 dbus-x11 xvfb
+      - run: dbus-run-session -- xvfb-run -a /usr/bin/python3 tests/desktop_smoke.py
+  package:
+    needs: [core, desktop]
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Select automatic version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump || 'patch' }}
+        run: |
+          args=()
+          if [[ "$GITHUB_REF" == refs/heads/main && "$GITHUB_EVENT_NAME" != pull_request ]]; then
+            args+=(--release --bump "$BUMP")
+          fi
+          /usr/bin/python3 scripts/release_version.py "${args[@]}"
+      - name: Build Debian package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          /usr/bin/python3 scripts/build_deb.py --version "$VERSION" --output dist
+          cp AGENT_INSTRUMENT_GUIDE.md dist/
+          cp packaging/INSTALL.md dist/
+          (cd dist && sha256sum -c ./*.deb.sha256)
+      - name: Install and verify packaged application
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dbus-x11 xvfb desktop-file-utils ./dist/*.deb
+          /usr/bin/python3 scripts/verify_deb.py dist/*.deb
+          /usr/bin/gate --version
+          desktop-file-validate /usr/share/applications/io.github.MAWoodMain.GATE.desktop
+          dbus-run-session -- xvfb-run -a /usr/bin/python3 tests/installed_smoke.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gate-ate-${{ steps.version.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+  release:
+    needs: package
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Download verified package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.package.outputs.version }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "gate-ate-$VERSION" --dir dist
+      - name: Tag source and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.package.outputs.version }}
+          RELEASE_TAG: ${{ needs.package.outputs.tag }}
+        run: |
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$GITHUB_SHA"
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -a "$RELEASE_TAG" "$GITHUB_SHA" -m "GATE $VERSION" -m "GATE-Actions-Run: $GITHUB_RUN_ID"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "GATE $VERSION" --generate-notes
+          fi

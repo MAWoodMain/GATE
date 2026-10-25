@@ -1,0 +1,12 @@
+[Unit]
+Description=GATE instrument acquisition service
+After=graphical-session-pre.target
+PartOf=graphical-session.target
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/gate service
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+[Install]
+WantedBy=graphical-session.target

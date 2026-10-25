@@ -1,0 +1,15 @@
+Package: gate-ate
+Version: @VERSION@
+Section: electronics
+Priority: optional
+Architecture: all
+Maintainer: Matthew Wood <mawoodmain@googlemail.com>
+Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0, gir1.2-glib-2.0, systemd, udev
+Recommends: gnome-shell (>= 46), gnome-shell (<< 51)
+Homepage: https://github.com/MAWoodMain/GATE
+Installed-Size: @SIZE@
+Description: Gnome Automatic Test Equipment service and device manager
+ Detect and use test equipment from an agent-operated Ubuntu service.
+ Provides authenticated local HTTP control, shared-timebase recording,
+ a GTK device manager, and a GNOME Shell measurement indicator.
+ Initial drivers support Siglent SDS1202X-E and Fluke 45 instruments.

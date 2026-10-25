@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=GATE
+Comment=Gnome Automatic Test Equipment
+Exec=gate gui
+Icon=applications-engineering
+Terminal=false
+Categories=Science;Electronics;
+StartupNotify=true

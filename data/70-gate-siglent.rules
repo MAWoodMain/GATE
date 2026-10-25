@@ -1,0 +1,3 @@
+# SDS1202X-E (shared Siglent USBTMC VID/PID). Allow only the active local seat.
+SUBSYSTEM=="usb", ATTR{idVendor}=="f4ed", ATTR{idProduct}=="ee3a", TAG+="uaccess"
+SUBSYSTEM=="usbmisc", KERNEL=="usbtmc[0-9]*", ATTRS{idVendor}=="f4ed", ATTRS{idProduct}=="ee3a", TAG+="uaccess"
