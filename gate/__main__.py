@@ -1,8 +1,10 @@
 import argparse
 import json
+from gate import __version__
 
 def main():
     parser = argparse.ArgumentParser(description="GATE — Gnome Automatic Test Equipment")
+    parser.add_argument("--version", action="version", version=f"GATE {__version__}")
     sub = parser.add_subparsers(dest="command")
     daemon = sub.add_parser("service", help="Run acquisition and D-Bus service")
     daemon.add_argument("--demo", action="store_true")

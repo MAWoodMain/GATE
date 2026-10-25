@@ -38,7 +38,7 @@ Every request requires `Authorization: Bearer <token>`. POST bodies require `Con
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /v1/health` | API version, raw-command setting, supported actions |
+| `GET /v1/health` | API/application versions, raw-command setting, supported actions |
 | `GET /v1/state` | Complete cached acquisition state, command results, settings and recording status |
 | `GET /v1/instruments` | Instrument identities, readings and driver capabilities |
 | `GET /v1/instruments/<encoded-id>` | One instrument; percent-encode the entire ID including slashes |

@@ -8,6 +8,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
+from gate import __version__
 
 ACTIONS = {'scan', 'connect', 'disconnect', 'settings', 'demo', 'record', 'stop_recording', 'select_function',
            'static', 'sweep', 'output', 'cancel_sweep', 'query', 'write'}
@@ -57,7 +58,7 @@ class ControlServer:
                 parts = urlsplit(self.path).path.strip('/').split('/')
                 state = owner.engine.snapshot()
                 if parts == ['v1', 'health']:
-                    self.reply(200, {'api_version': 1, 'service': 'GATE', 'allow_raw': owner.allow_raw,
+                    self.reply(200, {'api_version': 1, 'version': __version__, 'service': 'GATE', 'allow_raw': owner.allow_raw,
                                      'actions': sorted(ACTIONS if owner.allow_raw else ACTIONS-{'query','write'})})
                 elif parts == ['v1', 'state']:
                     self.reply(200, state)

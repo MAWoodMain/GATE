@@ -6,6 +6,7 @@ import gi
 gi.require_version('Gtk', '4.0')
 from gi.repository import Gio, GLib, Gtk
 from gate.service import BUS, PATH
+from gate.resources import documentation
 
 CSS = b'''
 window { background: #111820; color: #edf4fa; }
@@ -68,7 +69,7 @@ class Window(Gtk.ApplicationWindow):
         agent.append(self.label('Agent access', 'tag'))
         self.api = self.label('Waiting for service…', 'muted')
         agent.append(self.api)
-        guide = str(Path(__file__).resolve().parents[1]/'AGENT_INSTRUMENT_GUIDE.md')
+        guide = str(documentation('AGENT_INSTRUMENT_GUIDE.md'))
         agent.append(self.button('Open agent guide',lambda:Gio.AppInfo.launch_default_for_uri(Path(guide).as_uri(),None)))
         outer.append(agent)
         row = Gtk.Box(spacing=10)

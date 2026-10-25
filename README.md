@@ -16,6 +16,19 @@ Agents: start with [the instrument control guide](AGENT_INSTRUMENT_GUIDE.md). Th
 
 Demo devices are explicitly labelled **SIMULATED** in the app and **DEMO** in the top bar. Their IDs start with `demo:` in recordings. GATE never infers supply command dialects from a generic SCPI ID; each real output driver needs model-specific limits and verification.
 
+## Debian package and automatic releases
+
+The GitHub Actions workflow builds an architecture-independent `.deb`, verifies an actual apt installation on Ubuntu 24.04, and uploads packages/checksums/guides as build artifacts. Once merged into `main`, successful builds publish versioned GitHub Releases automatically: 0.1.0 initially, then patch increments. Manual runs can choose minor or major bumps. Branch/PR builds use commit-qualified preview versions.
+
+Build locally with Python 3.11+ and dpkg:
+
+```bash
+python3 scripts/build_deb.py --output dist
+sudo apt install ./dist/gate-ate_*_all.deb
+```
+
+Follow [package installation and migration instructions](packaging/INSTALL.md) before replacing a development installation. The package installs `/usr/bin/gate`, a user service, desktop entry, GNOME extension, USB rule and agent documentation. Runtime and package versions are stamped consistently from the release version.
+
 ## Ubuntu installation
 
 Target: Ubuntu with GNOME Shell 46–50 and Python 3.10+. These Shell versions are declared by the extension; live Shell testing is still required. Core and desktop smoke tests run in CI on Ubuntu 24.04.
