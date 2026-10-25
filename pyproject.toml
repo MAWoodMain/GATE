@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "gnome-automatic-test-equipment"
+version = "0.1.0"
+description = "GATE — Gnome Automatic Test Equipment"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+[project.scripts]
+gate = "gate.__main__:main"
+[project.entry-points."gate.drivers"]
+siglent_sds = "gate.drivers.siglent:SiglentSDS"
+[tool.setuptools.packages.find]
+include = ["gate*"]

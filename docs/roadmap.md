@@ -1,0 +1,23 @@
+# Roadmap
+
+## Next hardware milestone
+
+1. Configure local USBTMC permissions and validate the SDS1202X-E identity and all six scalar readings against its front panel. Capture real response fixtures, including missing signal and disabled channels.
+2. Add waveform transfer with definite-length binary blocks, calibrated axes, acquisition timestamps, and bounded record lengths.
+3. Validate the GNOME top bar on Ubuntu 24.04 GNOME 46 and newer target Shell releases. Add persistent channel selection and compact engineering-unit formatting.
+4. Add the first physical multimeter and bench PSU after their exact models are known. Include channel capabilities, limits, explicit arming, readback checks, and verified stop behavior.
+
+## Bench workflows
+
+- Persistent connections and named sessions; live plots, event timeline, channel selection and units.
+- Sweep plans with current limits, settle conditions, failure policies, and UI acknowledgement of actual hardware state.
+- Export event streams and device/firmware metadata; indexing and retention for long recordings.
+- USB hotplug/reconnect with backoff and explicit output recovery policy.
+- VXI-11/HiSLIP via an optional VISA transport, serial, GPIB, and service discovery.
+
+## Scale and distribution
+
+- Concurrent acquisition workers with one owner per instrument/transport and measured timing uncertainty.
+- Capability-based UI, model catalog, driver validation fixtures, and a published plugin compatibility policy.
+- Hardware trigger/clock synchronization where supported, distinct from host-timestamp alignment.
+- Ubuntu package and release artifacts, integration tests on supported GNOME versions, accessible/localized UI, and long-duration tests.
