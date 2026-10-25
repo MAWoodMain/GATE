@@ -16,7 +16,7 @@ Demo devices are explicitly labelled **SIMULATED** in the app and **DEMO** in th
 
 ## Ubuntu installation
 
-Target: Ubuntu with GNOME Shell 46–49 and Python 3.10+. These Shell versions are declared by the extension; live Shell testing is still required. Core and desktop smoke tests run in CI on Ubuntu 24.04.
+Target: Ubuntu with GNOME Shell 46–50 and Python 3.10+. These Shell versions are declared by the extension; live Shell testing is still required. Core and desktop smoke tests run in CI on Ubuntu 24.04.
 
 ```bash
 sudo apt update
