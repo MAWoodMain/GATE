@@ -112,6 +112,38 @@ class CoreTests(unittest.TestCase):
             server.close();thread.join(timeout=3)
         self.assertEqual(commands,['*IDN?','C1:PAVA? PKPK','C1:PAVA? RMS','C1:PAVA? FREQ','C2:PAVA? PKPK','C2:PAVA? RMS','C2:PAVA? FREQ'])
 
+    def test_usb_message_spans_transfers_without_newline(self):
+        from unittest.mock import patch
+        identity = b'Siglent Technologies,SDS1202X-E,SDS1EDEC4R1460,1.3.26'
+        chunks = [identity[:48], identity[48:]]
+        attributes = iter([0, 1])
+        def ioctl(fd, request, argument, *extra):
+            if request == 0x80015B18:
+                argument[0] = next(attributes)
+        with patch('gate.transport.os.open', return_value=123), \
+             patch('gate.transport.os.write', return_value=6) as write, \
+             patch('gate.transport.os.read', side_effect=chunks), \
+             patch('gate.transport.os.close'), \
+             patch('gate.transport.fcntl.ioctl', side_effect=ioctl), \
+             patch('gate.transport.select.select', side_effect=AssertionError('USB must initiate read without poll')):
+            transport = SCPI('/dev/usbtmc3')
+            self.assertEqual(transport.query('*IDN?'), identity.decode())
+            write.assert_called_once_with(123, b'*IDN?\n')
+            transport.close()
+
+    def test_usb_failure_closes_session(self):
+        from unittest.mock import patch
+        with patch('gate.transport.os.open', return_value=123), \
+             patch('gate.transport.os.write', return_value=6), \
+             patch('gate.transport.os.read', side_effect=TimeoutError('USB timeout')), \
+             patch('gate.transport.os.close') as close, \
+             patch('gate.transport.fcntl.ioctl'):
+            transport = SCPI('/dev/usbtmc3')
+            with self.assertRaises(TimeoutError):
+                transport.query('*IDN?')
+            close.assert_called_once_with(123)
+            self.assertIsNone(transport.fd)
+
     def test_timeout_discards_connection(self):
         server=socket.socket();server.bind(('127.0.0.1',0));server.listen(1)
         release=threading.Event()

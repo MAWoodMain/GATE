@@ -2,7 +2,7 @@
 
 **Gnome Automatic Test Equipment** — a native Ubuntu bench application with live GNOME top bar measurements, instrument discovery, output control, and a shared recording timeline.
 
-This is the initial 0.1 foundation. The GTK4 desktop, D-Bus acquisition service, SQLite recorder, CSV export, extension, and simulated bench are implemented. The first hardware driver targets the **Siglent SDS1202X-E**, reading C1/C2 peak-to-peak, RMS, and frequency using SCPI over Linux USBTMC or a manually supplied TCP endpoint. Actual scope communication still needs hardware validation after USB permissions are configured. Waveform capture is a future addition.
+This is the initial 0.1 foundation. The GTK4 desktop, D-Bus acquisition service, SQLite recorder, CSV export, extension, and simulated bench are implemented. The first hardware driver targets the **Siglent SDS1202X-E**, reading C1/C2 peak-to-peak, RMS, and frequency using SCPI over Linux USBTMC or a manually supplied TCP endpoint. USB identity and all six scalar queries have been verified against an attached SDS1202X-E running firmware 1.3.26; comparison against calibrated signals and the front panel is still pending. Waveform capture is a future addition.
 
 ## Equipment support
 
@@ -10,7 +10,7 @@ This is the initial 0.1 foundation. The GTK4 desktop, D-Bus acquisition service,
 |---|---|---|
 | Bench multimeters | Driver interface ready; model drivers pending | DC voltage |
 | Bench power supplies | Driver interface ready; model drivers pending | Voltage/current readback, static voltage, stepped sweeps, output enable |
-| Oscilloscopes | SDS1202X-E scalar measurement driver, hardware validation pending | Peak-to-peak and frequency |
+| Oscilloscopes | SDS1202X-E scalar measurement driver, USB communication verified | Peak-to-peak and frequency |
 
 Demo devices are explicitly labelled **SIMULATED** in the app and **DEMO** in the top bar. Their IDs start with `demo:` in recordings. GATE never infers supply command dialects from a generic SCPI ID; each real output driver needs model-specific limits and verification.
 
@@ -90,7 +90,7 @@ D-Bus commands acknowledge queueing, not completion; inspect `gate status` or th
 
 Every recording session maps a host monotonic clock to a UTC origin. Every cycle has a shared `tick` and `tick_ns`. Each instrument has its own `read_start_ns` and `read_end_ns`, relative to the same session origin, enclosing its batch of channel queries. Individual channels within that batch are read sequentially and do not have separate acquisition timestamps. CSV includes `tick_utc_ns` derived from the session origin.
 
-**This is software alignment, not simultaneous hardware sampling.** Scope measurements describe the scope's own acquisition, and timing uncertainty includes transport and instrument latency. Output commands and sweep steps have timestamped events. Missed deadlines are skipped without bursts; overruns are shown in service status. Hardware triggers/clock distribution and waveform timebase alignment are future work.
+**This is software alignment, not simultaneous hardware sampling.** Scope measurements describe the scope's own acquisition, and timing uncertainty includes transport and instrument latency. Output commands and sweep steps have timestamped events. Missed deadlines are skipped without bursts; overruns are exposed in service state. Hardware triggers/clock distribution and waveform timebase alignment are future work.
 
 Readings with no valid value use SQL NULL and a quality flag, not a fabricated zero. A failed instrument produces an error record and is disconnected so other devices continue. Re-scan to retry.
 
@@ -131,3 +131,9 @@ sudo udevadm control --reload-rules
 ```
 
 Recordings remain under `~/.local/share/gate/recordings` (or `$XDG_DATA_HOME/gate/recordings`). Keep or back them up as needed.
+
+### Verified SDS1202X-E USB behavior
+
+On the attached scope (firmware 1.3.26), USB identification and both channels' PKPK/RMS/FREQ queries succeed. With its current inputs, C1 measured about 80 mV peak-to-peak and 27 mV RMS; C2 about 8 mV peak-to-peak and 3 mV RMS. Frequency replies were `****`, which GATE correctly displays as unavailable. These are communication checks, not accuracy calibration.
+
+The USB transport uses blocking kernel reads with a bounded USBTMC timeout and checks the USBTMC EOM flag. It requests 48-byte payload chunks because this scope advertises 64-byte bulk endpoints at high speed; larger requests caused truncated identity packets and subsequent tag mismatches on the development host. No scope settings are changed.

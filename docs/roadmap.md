@@ -2,7 +2,7 @@
 
 ## Next hardware milestone
 
-1. Configure local USBTMC permissions and validate the SDS1202X-E identity and all six scalar readings against its front panel. Capture real response fixtures, including missing signal and disabled channels.
+1. USB permissions, identity, and all six scalar queries now work on the attached SDS1202X-E. Next compare readings against its front panel and known signals, and expand fixtures for missing signal and disabled channels.
 2. Add waveform transfer with definite-length binary blocks, calibrated axes, acquisition timestamps, and bounded record lengths.
 3. Validate the GNOME top bar on Ubuntu 24.04 GNOME 46 and newer target Shell releases. Add persistent channel selection and compact engineering-unit formatting.
 4. Add the first physical multimeter and bench PSU after their exact models are known. Include channel capabilities, limits, explicit arming, readback checks, and verified stop behavior.

@@ -132,6 +132,7 @@ class Engine:
                 readings = instrument.read()
             except Exception as exc:
                 error = str(exc)
+                self._status(f"{instrument.name}: {error}")
                 readings = [Reading("connection", None, "", "error")]
             end = time.monotonic_ns() - self.origin
             if self.recorder:
@@ -169,7 +170,8 @@ class Engine:
                 deadline += self.interval
                 now = time.monotonic()
                 if deadline < now:
-                    self._status("Acquisition exceeds interval; skipped overdue ticks")
+                    with self.lock:
+                        self.state["overrun"] = True
                     deadline = now + self.interval
                 self.stop_event.wait(max(0, deadline-time.monotonic()))
         except Exception as exc:
