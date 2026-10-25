@@ -106,6 +106,34 @@ class SCPI:
                 self.close()  # Never reuse a timed-out session with a delayed response.
                 raise
 
+    def write(self, command):
+        if "\n" in command or "\r" in command:
+            raise ValueError("One SCPI command per transaction")
+        with self.lock:
+            if self.fd is None:
+                raise ConnectionError("Instrument connection is closed")
+            payload = (command + "\n").encode("ascii")
+            deadline = time.monotonic() + self.timeout
+            try:
+                if self.sock is None:
+                    self._usb_timeout(self.timeout)
+                while payload:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("SCPI write timed out")
+                    if self.sock is not None and not select.select([], [self.fd], [], remaining)[1]:
+                        raise TimeoutError("SCPI write timed out")
+                    try:
+                        count = os.write(self.fd, payload)
+                    except BlockingIOError:
+                        continue
+                    if count == 0:
+                        raise ConnectionError("Instrument disconnected")
+                    payload = payload[count:]
+            except Exception:
+                self.close()
+                raise
+
     def close(self):
         if self.sock is not None:
             self.sock.close()

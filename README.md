@@ -1,8 +1,10 @@
 # GATE
 
-**Gnome Automatic Test Equipment** — a native Ubuntu bench application with live GNOME top bar measurements, instrument discovery, output control, and a shared recording timeline.
+**Gnome Automatic Test Equipment** — an agent-operated Ubuntu instrument service with a GNOME top bar for human monitoring and a small device-management/settings window.
 
-This is the initial 0.1 foundation. The GTK4 desktop, D-Bus acquisition service, SQLite recorder, CSV export, extension, and simulated bench are implemented. Hardware support includes the **Fluke 45** over RS-232 and **Siglent SDS1202X-E**, reading C1/C2 peak-to-peak, RMS, and frequency using SCPI over Linux USBTMC or a manually supplied TCP endpoint. USB identity and all six scalar queries have been verified against an attached SDS1202X-E running firmware 1.3.26; comparison against calibrated signals and the front panel is still pending. Waveform capture is a future addition.
+This is the initial application foundation. The GTK4 desktop, D-Bus acquisition service, SQLite recorder, CSV export, extension, and simulated bench are implemented. Hardware support includes the **Fluke 45** over RS-232 and **Siglent SDS1202X-E**, reading C1/C2 peak-to-peak, RMS, and frequency using SCPI over Linux USBTMC or a manually supplied TCP endpoint. USB identity and all six scalar queries have been verified against an attached SDS1202X-E running firmware 1.3.26; comparison against calibrated signals and the front panel is still pending. Waveform capture is a future addition.
+
+Agents: start with [the instrument control guide](AGENT_INSTRUMENT_GUIDE.md). The authenticated loopback HTTP API listens on port 8765 by default; its private token/URL are discovered from `$XDG_RUNTIME_DIR/gate/control.json`.
 
 ## Equipment support
 
@@ -26,9 +28,9 @@ systemctl --user enable --now gate
 ~/.local/bin/gate gui
 ```
 
-Keep the checkout in place: the installer creates an editable virtual environment inside it and a launcher in `~/.local/bin`. Add that directory to your PATH if `gate` isn't found. The service runs as your normal user. It discovers accessible USBTMC instruments at startup; use **Scan USB** after connecting another device. A connection failure is displayed and logged as an unavailable reading; click Scan USB to reconnect. It does not reset the instrument or change acquisition settings.
+Keep the checkout in place: the installer creates an editable virtual environment inside it and a launcher in `~/.local/bin`. Add that directory to your PATH if `gate` isn't found. The service runs as your normal user. The window only adds/removes devices, shows connection status and agent access, and changes the acquisition interval; closing it leaves the service running. It discovers accessible USBTMC instruments at startup; use **Scan USB** after connecting another device. A connection failure is displayed and logged as an unavailable reading; click Scan USB to reconnect. It does not reset the instrument or change acquisition settings.
 
-The initial service uses a 1-second polling interval. To use another interval, stop the systemd service and start `gate service --interval 0.5` manually; minimum 0.1 seconds. Slower equipment may determine the actual cycle rate.
+The initial service uses a 1-second polling interval. Change it in **Service settings** or through the agent API; settings and manually added serial/TCP endpoints persist across service restarts. USBTMC equipment is rescanned at startup. Stop recording before changing interval. Slower equipment may determine the actual cycle rate.
 
 ### GNOME top bar
 
@@ -38,7 +40,7 @@ The installer copies the extension to your user extension directory. Log out and
 gnome-extensions enable gate@mawoodmain.github.io
 ```
 
-The top bar displays a live measurement and recording dot. Click **GATE** and expand a device dropdown under **Display measurement** to select a channel. Real instruments appear before demos; each instrument has its own dropdown with readable channel names and live values. Updates preserve open dropdowns and keyboard focus, including when a value becomes unavailable. Selection lasts for the extension session. A dot marks the selected channel, and **Open GATE** opens the app. When the service stops, the indicator says offline; old samples are marked stale after five seconds. The service continues logging when you close the window.
+The top bar displays a live measurement and recording dot. Click **GATE** and expand a device dropdown under **Display measurement** to select a channel. Real instruments appear before demos; each instrument has its own dropdown with readable channel names and live values. Updates preserve open dropdowns and keyboard focus, including when a value becomes unavailable. Selecting a Fluke function switches its primary measurement mode and pins that reading only after hardware confirmation. All ten primary functions are listed even when inactive; secondary-display controls are omitted. Selection lasts for the extension session. A dot marks the selected channel, and **Open GATE** opens the app. When the service stops, the indicator says offline; old samples are marked stale after five seconds. The service continues logging when you close the window.
 
 ### Connect the SDS1202X-E over USB
 
@@ -58,7 +60,7 @@ To connect over a verified raw SCPI TCP endpoint, enter `tcp://HOST:5025` (or it
 
 ## Try the bench without hardware
 
-In the app click **Add demo bench**. Or start a demo service manually (stop an existing service first):
+In the device manager click **Add demo devices**. Or start a demo service manually (stop an existing service first):
 
 ```bash
 systemctl --user stop gate
@@ -67,13 +69,13 @@ gate service --demo
 gate gui
 ```
 
-Use the output workbench to set 0–30 V on the simulated supply. Applying a voltage or running a sweep never enables the output; explicitly click **Enable output**. A sweep includes its starting value, steps toward the endpoint, clamps to the exact endpoint, and holds the final value. Dwell must be at least the polling interval; each step holds for at least the requested dwell and actual timing is recorded. Cancel holds the last setpoint. Disable output also cancels the sweep. Closing the window leaves the service running; stopping the service closes devices and disables demo outputs.
+Use the agent API to set 0–30 V on the simulated supply (see the agent guide). Applying a voltage or running a sweep never enables the output; explicitly click **Enable output**. A sweep includes its starting value, steps toward the endpoint, clamps to the exact endpoint, and holds the final value. Dwell must be at least the polling interval; each step holds for at least the requested dwell and actual timing is recorded. Cancel holds the last setpoint. Disable output also cancels the sweep. Closing the window leaves the service running; stopping the service closes devices and disables demo outputs.
 
 Real output control is deliberately not implemented until a specific bench PSU model can be validated. The demo establishes the workflow and recording contract.
 
 ## Logging and export
 
-Choose a recording filename and click **Start recording**. All connected devices, including PSU settings, output state, and readback, enter the same recording. Instruments connected during recording join subsequent cycles. **Stop recording** commits the session; CSV export also works against committed live data.
+Agents start/stop recording through the HTTP API or CLI commands below. All connected devices, including PSU settings, output state, and readback, enter the same recording. Instruments connected during recording join subsequent cycles. Stopping recording commits the session; CSV export also works against committed live data.
 
 ```bash
 gate export bench.sqlite bench.csv
@@ -140,3 +142,9 @@ Recordings remain under `~/.local/share/gate/recordings` (or `$XDG_DATA_HOME/gat
 On the attached scope (firmware 1.3.26), USB identification and both channels' PKPK/RMS/FREQ queries succeed. With its current inputs, C1 measured about 80 mV peak-to-peak and 27 mV RMS; C2 about 8 mV peak-to-peak and 3 mV RMS. Frequency replies were `****`, which GATE correctly displays as unavailable. These are communication checks, not accuracy calibration.
 
 The USB transport uses blocking kernel reads with a bounded USBTMC timeout and checks the USBTMC EOM flag. It requests 48-byte payload chunks because this scope advertises 64-byte bulk endpoints at high speed; larger requests caused truncated identity packets and subsequent tag mismatches on the development host. No scope settings are changed.
+
+## Agent service and device manager
+
+See [AGENT_INSTRUMENT_GUIDE.md](AGENT_INSTRUMENT_GUIDE.md) for authentication, inspection, command completion, primary-function selection, logging, sweeps, raw commands and the known bench connection. Run `gate service --allow-raw` to opt into authenticated model-specific commands in addition to typed controls. The service binds only to localhost. `gate gui` opens the device manager; all monitoring lives in the top bar.
+
+On the development host, the user service is enabled for graphical login and runs with raw commands explicitly enabled. After restarting, reacquire the runtime manifest because its bearer token rotates.

@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from gate.service import proxy, call
-process = subprocess.Popen([sys.executable, '-m', 'gate', 'service', '--demo', '--interval', '0.1'])
+process = subprocess.Popen([sys.executable, '-m', 'gate', 'service', '--demo', '--interval', '0.1', '--no-control-api', '--ephemeral'])
 try:
     for attempt in range(50):
         try:
@@ -40,7 +40,10 @@ try:
     def check():
         try:
             assert len(window.labels)==3, window.status.get_text()
-            print('PASS: D-Bus service, recording, GTK window and live cards')
+            assert window.get_title() == 'GATE · Devices & Settings'
+            assert all('Connected' in label.get_text() or 'Demo' in label.get_text() for label in window.labels.values())
+            assert not hasattr(window, 'voltage'), 'Measurement/output controls belong outside device manager'
+            print('PASS: D-Bus service, recording, device manager window and device status cards')
             if os.environ.get('GATE_SCREENSHOT'):
                 from gi.repository import Gdk, Graphene
                 paintable=Gtk.WidgetPaintable.new(window)

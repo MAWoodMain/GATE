@@ -15,3 +15,12 @@ class Instrument(Protocol):
     simulated: bool
     def read(self) -> list[Reading]: ...
     def close(self) -> None: ...
+
+@dataclass(frozen=True)
+class MeasurementFunction:
+    """A measurement a driver can expose, including currently inactive modes."""
+    id: str
+    label: str
+    channel: str
+    unit: str
+    configurable: bool = False

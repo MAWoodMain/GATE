@@ -1,11 +1,16 @@
 """Fluke 45 display acquisition; preserves front-panel settings."""
 import math
 import re
-from gate.model import Reading
+from gate.model import Reading, MeasurementFunction
 
 FUNCTIONS = {
     'VDC': 'V', 'VAC': 'V', 'VACDC': 'V', 'ADC': 'A', 'AAC': 'A',
     'AACDC': 'A', 'OHMS': 'Ω', 'FREQ': 'Hz', 'DIODE': 'V', 'CONT': 'V',
+}
+FUNCTION_LABELS = {
+    'VDC': 'DC voltage', 'VAC': 'AC voltage', 'VACDC': 'AC + DC voltage',
+    'ADC': 'DC current', 'AAC': 'AC current', 'AACDC': 'AC + DC current',
+    'OHMS': 'Resistance', 'FREQ': 'Frequency', 'DIODE': 'Diode test', 'CONT': 'Continuity',
 }
 VALUE = re.compile(r'^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:E[+-]?\d+)?)\s*([A-Z]*)$', re.I)
 
@@ -42,9 +47,41 @@ class Fluke45:
         self.transport = transport
         self.id = transport.resource
         self.name = identity.strip()
+        self.current_function = None
+        self._settling = False
+
+    def functions(self):
+        # Primary display only. Secondary display readings remain passive.
+        return [MeasurementFunction(code, FUNCTION_LABELS[code], f'primary.{code}', unit, True)
+                for code, unit in FUNCTIONS.items()]
+
+    def select_function(self, function):
+        if function not in FUNCTIONS:
+            raise ValueError('Unsupported Fluke 45 primary measurement function')
+        # Function mnemonics are fixed by the driver, never arbitrary SCPI input.
+        self.transport.query(function)
+        actual = self.transport.query('FUNC1?').strip().upper()
+        if actual != function:
+            raise ValueError(f'Fluke 45 did not select {function}; reports {actual}')
+        self.current_function = actual
+        self._settling = True
 
     def read(self):
+        timeout = getattr(self.transport, 'timeout', None)
+        if self._settling and timeout is not None:
+            # First resistance/range conversion after a mode change can take
+            # longer than a normal display query. Keep this bounded.
+            self.transport.timeout = max(timeout, 10.0)
+        try:
+            return self._read_displays()
+        finally:
+            if timeout is not None:
+                self.transport.timeout = timeout
+            self._settling = False
+
+    def _read_displays(self):
         primary = self.transport.query('FUNC1?').strip().upper()
+        self.current_function = primary
         modifiers = int(self.transport.query('MOD?'))
         values = [value.strip() for value in self.transport.query('VAL?').split(',')]
         if primary not in FUNCTIONS or not 0 <= modifiers <= 127 or len(values) not in (1, 2):

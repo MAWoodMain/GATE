@@ -7,7 +7,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 from gate.discovery import connect
-from gate.drivers.fluke45 import Fluke45, parse_value
+from gate.drivers.fluke45 import Fluke45, parse_value, FUNCTIONS
 from gate.engine import Engine
 from gate.serial import CommandError, FlukeSerial
 
@@ -18,6 +18,7 @@ class SerialMeter:
         self.resource = 'serial://' + os.ttyname(self.slave) + '?baud=9600'
         self.echo = echo
         self.commands = []
+        self.refuse_changes = False
         self.responses = {'*IDN?': 'FLUKE, 45, fixture, 1.7 D1.0', 'FUNC1?': 'VDC',
                           'MOD?': '0', 'VAL?': '+0.17E-3', 'FUNC2?': None}
         self.stop = threading.Event()
@@ -29,13 +30,21 @@ class SerialMeter:
             if not select.select([self.master], [], [], .05)[0]:
                 continue
             buffer += os.read(self.master, 4096)
+            if b'\x03' in buffer:
+                _, buffer = buffer.split(b'\x03', 1)
+                self.commands.append('\x03')
+                os.write(self.master, b'\r\n=>\r\n')
             while b'\r' in buffer:
                 command, buffer = buffer.split(b'\r', 1)
                 command = command.decode('ascii')
                 self.commands.append(command)
                 if command == 'SILENT?':
                     continue
-                response = self.responses.get(command, '')
+                if command in FUNCTIONS and not self.refuse_changes:
+                    self.responses['FUNC1?'] = command
+                    self.responses['MOD?'] = '0'
+                    self.responses['VAL?'] = '+1E+9' if command == 'OHMS' else '+0.17E-3'
+                response = None if command in FUNCTIONS and self.refuse_changes else self.responses.get(command, '')
                 prompt = '!>' if response is None else '?>' if command == 'BAD?' else '=>'
                 payload = ((command + '\r\n' if self.echo else '') +
                            (response + '\r\n' if response else '') + prompt + '\r\n').encode()
@@ -54,6 +63,78 @@ class SerialMeter:
         self.close()
 
 class FlukeTests(unittest.TestCase):
+    def test_primary_function_catalog_and_confirmed_switches(self):
+        with SerialMeter() as bench:
+            meter = connect(bench.resource)
+            try:
+                functions = meter.functions()
+                self.assertEqual({f.id for f in functions}, set(FUNCTIONS))
+                self.assertTrue(all(f.configurable and f.channel.startswith('primary.') for f in functions))
+                for function in functions:
+                    meter.select_function(function.id)
+                    self.assertEqual(meter.current_function, function.id)
+                    self.assertEqual(bench.responses['FUNC1?'], function.id)
+                before = list(bench.commands)
+                with self.assertRaises(ValueError):
+                    meter.select_function('OHMS;*RST')
+                self.assertEqual(bench.commands, before)
+                self.assertFalse(any(command.endswith('2') for command in bench.commands))
+            finally:
+                meter.close()
+
+    def test_service_function_switch_confirmation_failure_and_logging(self):
+        with SerialMeter() as bench, tempfile.TemporaryDirectory() as folder:
+            engine = Engine()
+            engine.command('connect',dict(resource=bench.resource))
+            path = str(Path(folder)/'switch.sqlite')
+            engine.command('record',dict(path=path))
+            try:
+                engine.cycle()
+                engine.command('select_function',dict(instrument=bench.resource, function='OHMS', request='ohms'))
+                result = engine.snapshot()['controls']['ohms']
+                self.assertEqual((result['state'],result['channel']),('applied','primary.OHMS'))
+                engine.cycle()
+                device = engine.snapshot()['instruments'][0]
+                self.assertEqual(device['current_function'],'OHMS')
+                self.assertEqual(len(device['functions']),10)
+                reading = device['readings'][0]
+                self.assertEqual((reading['channel'],reading['unit'],reading['quality']),('primary.OHMS','Ω','overload'))
+                bench.refuse_changes = True
+                engine.command('select_function',dict(instrument=bench.resource, function='VDC', request='refused'))
+                self.assertEqual(engine.snapshot()['controls']['refused']['state'],'failed')
+                self.assertEqual(bench.responses['FUNC1?'],'OHMS')
+                engine.command('select_function',dict(instrument=bench.resource, function='invalid', request='invalid'))
+                self.assertEqual(engine.snapshot()['controls']['invalid']['state'],'failed')
+                engine.cycle()
+                self.assertFalse(engine.snapshot()['instruments'][0]['error'])
+            finally:
+                engine.command('stop_recording',{})
+                for instrument in engine.instruments.values():instrument.close()
+            with closing(sqlite3.connect(path)) as db:
+                self.assertEqual(db.execute('SELECT detail FROM events').fetchall(),[('select_function: OHMS',)])
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM samples WHERE channel='primary.OHMS'").fetchone()[0],2)
+
+    def test_mode_settling_uses_bounded_longer_timeout_once(self):
+        with SerialMeter() as bench:
+            meter = connect(bench.resource)
+            try:
+                original = meter.transport.timeout
+                meter.select_function('OHMS')
+                query = meter.transport.query
+                observed = []
+                def watched(command):
+                    observed.append(meter.transport.timeout)
+                    return query(command)
+                meter.transport.query = watched
+                meter.read()
+                self.assertTrue(all(timeout == 10 for timeout in observed))
+                self.assertEqual(meter.transport.timeout, original)
+                observed.clear()
+                meter.read()
+                self.assertTrue(all(timeout == original for timeout in observed))
+            finally:
+                meter.close()
+
     def test_identity_match(self):
         self.assertTrue(Fluke45.matches('FLUKE, 45, 6929061, 1.7 D1.0'))
         self.assertFalse(Fluke45.matches('FLUKE, 8845A, fixture, 1.0'))
@@ -69,7 +150,7 @@ class FlukeTests(unittest.TestCase):
                     self.assertEqual(readings[0].unit, 'V')
                     self.assertEqual(readings[1].quality, 'disabled')
                     self.assertNotIn('FUNC2?', bench.commands)
-                    self.assertTrue(all(c in ('', '*IDN?', 'FUNC1?', 'MOD?', 'VAL?') for c in bench.commands))
+                    self.assertTrue(all(c in ('\x03', '*IDN?', 'FUNC1?', 'MOD?', 'VAL?') for c in bench.commands))
                 finally:
                     meter.close()
 

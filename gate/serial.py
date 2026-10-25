@@ -30,6 +30,7 @@ class FlukeSerial:
         self.timeout = timeout
         self.lock = threading.Lock()
         self.buffer = b''
+        self._ready_at = 0.0
         self.fd = os.open(url.path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         try:
             fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -40,9 +41,18 @@ class FlukeSerial:
             attrs[6][termios.VMIN] = attrs[6][termios.VTIME] = 0
             termios.tcsetattr(self.fd, termios.TCSANOW, attrs)
             termios.tcflush(self.fd, termios.TCIFLUSH)
-            # A blank command finishes any incomplete line and obtains the ready
-            # prompt. No reset, function, range, echo or trigger setting is sent.
-            self.query('')
+            # Fluke's documented serial device-clear discards unfinished input
+            # and output, then emits a ready prompt. It does not reset functions,
+            # ranges, triggers, echo or calibration settings.
+            os.write(self.fd, b'\x03')
+            # Discard pending replies and the clear prompt before identification.
+            deadline = time.monotonic() + self.timeout
+            while time.monotonic() < deadline:
+                if not select.select([self.fd], [], [], min(.15, deadline-time.monotonic()))[0]:
+                    break
+                if not os.read(self.fd, 4096):
+                    raise ConnectionError('Serial adapter disconnected')
+            self._ready_at = time.monotonic() + .05
         except Exception:
             self.close()
             raise
@@ -53,8 +63,11 @@ class FlukeSerial:
         with self.lock:
             if self.fd is None:
                 raise ConnectionError('Serial connection is closed')
+            delay = self._ready_at - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
             deadline = time.monotonic() + self.timeout
-            payload = (command + '\r').encode('ascii')
+            payload = (command if command == '\x03' else command + '\r').encode('ascii')
             try:
                 while payload:
                     remaining = deadline - time.monotonic()
@@ -73,6 +86,7 @@ class FlukeSerial:
                         frame = self.buffer[:match.start()]
                         self.buffer = self.buffer[match.end():]
                         prompt = match[1].decode('ascii')
+                        self._ready_at = time.monotonic() + .05
                         if prompt != '=':
                             raise CommandError(command, prompt)
                         lines = [line.strip() for line in frame.decode('ascii').splitlines()]
@@ -95,6 +109,10 @@ class FlukeSerial:
             except Exception:
                 self.close()
                 raise
+
+    def write(self, command):
+        self.query(command)  # Fluke writes still produce a completion prompt.
+        return None
 
     def close(self):
         if self.fd is not None:

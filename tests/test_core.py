@@ -13,6 +13,19 @@ from gate.storage import export_csv
 from gate.transport import SCPI
 
 class CoreTests(unittest.TestCase):
+    def test_device_profiles_and_settings_survive_restart_without_output_replay(self):
+        with tempfile.TemporaryDirectory() as folder:
+            profile=Path(folder)/'devices.json'
+            engine=Engine(profile_path=profile)
+            engine.saved_resources.add('serial:///dev/fixture?baud=9600')
+            engine.command('settings',dict(interval=.5))
+            restarted=Engine(profile_path=profile)
+            self.assertEqual(restarted.interval,.5)
+            self.assertEqual(restarted.saved_resources,{'serial:///dev/fixture?baud=9600'})
+            self.assertFalse(restarted.instruments)
+            restarted.command('disconnect',dict(instrument='serial:///dev/fixture?baud=9600'))
+            self.assertFalse(Engine(profile_path=profile).saved_resources)
+
     def test_siglent_measurement_variants(self):
         for response in ('C1:PAVA PKPK,2.30E+00V', 'C1:PAVA PKPK,2.30E+00V,OK'):
             self.assertEqual(parse_measurement(response, 'PKPK', 'V'), 2.3)

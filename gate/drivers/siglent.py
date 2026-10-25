@@ -1,7 +1,7 @@
 """SDS1202X-E scalar measurements; no acquisition-setting changes."""
 import math
 import re
-from gate.model import Reading
+from gate.model import Reading, MeasurementFunction
 
 _NUMBER = re.compile(r"^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)([a-zA-Z%]*)$")
 
@@ -33,6 +33,13 @@ class SiglentSDS:
         self.transport = transport
         self.id = transport.resource
         self.name = identity.strip()
+
+    def functions(self):
+        labels = {"PKPK": "Peak-to-peak", "RMS": "RMS voltage", "FREQ": "Frequency"}
+        return [MeasurementFunction(f"{channel}.{parameter}", f"{channel} · {labels[parameter]}",
+                                    f"{channel}.{parameter}", unit)
+                for channel in ("C1", "C2")
+                for parameter, unit in (("PKPK", "V"), ("RMS", "V"), ("FREQ", "Hz"))]
 
     def read(self):
         readings = []

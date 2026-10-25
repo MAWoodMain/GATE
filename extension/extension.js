@@ -43,6 +43,8 @@ export default class GateExtension extends Extension {
     enable() {
         this._devices = new Map();
         this._lastState = null;
+        this._pendingSelection = null;
+        this._selectionError = null;
         this._button = new PanelMenu.Button(0.0, 'GATE');
         this._label = new St.Label({text: 'GATE · connecting', y_align: 2});
         this._button.add_child(this._label);
@@ -71,7 +73,16 @@ export default class GateExtension extends Extension {
 
     _render(state) {
         this._lastState = state;
-        const stale = Date.now() - state.updated_utc_ns / 1e6 > 5000;
+        const pending = this._pendingSelection;
+        const result = pending && state.controls?.[pending.request];
+        if (result?.state === 'applied') {
+            this._selected = JSON.stringify([pending.instrument, result.channel]);
+            this._pendingSelection = null;
+        } else if (result?.state === 'failed') {
+            this._selectionError = `Could not switch function: ${result.error}`;
+            this._pendingSelection = null;
+        }
+        const stale = Date.now() - state.updated_utc_ns / 1e6 > Math.max(5000, (state.interval_s ?? 1) * 2000);
         // Keep actors and their open/focus state. Only topology changes add/remove
         // items; values and quality changes update existing labels in place.
         const instruments = [...state.instruments].sort((a, b) =>
@@ -95,42 +106,92 @@ export default class GateExtension extends Extension {
             const title = deviceName(instrument);
             const serial = instrument.name.split(',')[2]?.trim();
             device.item.label.set_text(!instrument.simulated && serial ? `${title} · ${serial}` : title);
-            const channels = new Set(instrument.readings.map(reading => reading.channel));
+            const functions = instrument.functions?.length ? instrument.functions
+                : instrument.readings.map(reading => ({id: reading.channel,
+                    channel: reading.channel, label: channelName(reading.channel), configurable: false}));
+            const channels = new Set(functions.map(fn => fn.channel));
             for (const [channel, row] of device.channels) {
                 if (!channels.has(channel)) {
                     row.item.destroy();
                     device.channels.delete(channel);
                 }
             }
-            instrument.readings.forEach((reading, index) => {
-                const key = JSON.stringify([instrument.id, reading.channel]);
-                let row = device.channels.get(reading.channel);
+            functions.forEach((fn, index) => {
+                const key = JSON.stringify([instrument.id, fn.channel]);
+                let row = device.channels.get(fn.channel);
                 if (!row) {
                     const item = new PopupMenu.PopupMenuItem('');
                     row = {item};
-                    device.channels.set(reading.channel, row);
+                    device.channels.set(fn.channel, row);
                     device.item.menu.addMenuItem(item, index);
-                    item.connect('activate', () => {
-                        this._selected = key;
-                        if (this._lastState) this._render(this._lastState);
-                    });
+                    item.connect('activate', () => this._activateFunction(instrument.id, row.definition));
                 }
-                const value = readingValue(reading);
-                row.item.label.set_text(`${channelName(reading.channel)}   ${value}`);
-                row.item.sensitive = true;
+                row.definition = fn;
+                const reading = instrument.readings.find(r => r.channel === fn.channel ||
+                    r.channel.startsWith(`${fn.channel}.mod`)) ??
+                    (fn.configurable && instrument.current_function === fn.id
+                        ? instrument.readings.find(r => r.channel.startsWith('primary.')) : null);
+                const switching = this._pendingSelection?.instrument === instrument.id &&
+                    this._pendingSelection?.function === fn.id;
+                const value = switching ? 'switching…' : reading ? readingValue(reading) : '— (not active)';
+                row.item.label.set_text(`${fn.label === fn.channel ? channelName(fn.channel) : fn.label}   ${value}`);
+                row.item.sensitive = !switching;
                 row.item.setOrnament(this._selected === key ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NONE);
-                choices.push({key, text: `${title} · ${reading.channel} ${value}`});
+                choices.push({key, live: Boolean(reading),
+                    text: `${title} · ${fn.label} ${value}`});
             });
         });
         this._empty.visible = instruments.length === 0;
-        const selected = this._selected ? choices.find(choice => choice.key === this._selected) : choices[0];
+        const selected = this._selected ? choices.find(choice => choice.key === this._selected)
+            : choices.find(choice => choice.live) ?? choices[0];
         const text = selected?.text ?? (this._selected ? 'selected device unavailable' : 'no readings');
         this._label.set_text(`GATE${state.recording ? ' ●' : ''} · ${stale ? 'STALE' : text}`);
-        this._details.label.set_text(`${stale ? 'Stale readings' : state.recording ? 'Recording' : 'Live'} · ${instruments.length} instruments · ${state.status}`);
+        this._details.label.set_text(this._selectionError ?? (this._pendingSelection
+            ? `Switching to ${this._pendingSelection.label}…`
+            : `${stale ? 'Stale readings' : state.recording ? 'Recording' : 'Live'} · ${instruments.length} instruments · ${state.status}`));
+    }
+
+    _activateFunction(instrument, fn) {
+        this._selectionError = null;
+        if (!fn.configurable) {
+            this._pendingSelection = null;
+            this._selected = JSON.stringify([instrument, fn.channel]);
+            if (this._lastState) this._render(this._lastState);
+            return;
+        }
+        const request = GLib.uuid_string_random();
+        this._pendingSelection = {request, instrument, function: fn.id, label: fn.label};
+        if (this._lastState) this._render(this._lastState);
+        this._sendCommand({action: 'select_function', instrument, function: fn.id, request}, error => {
+            if (this._pendingSelection?.request !== request) return;
+            if (error) {
+                this._pendingSelection = null;
+                this._selectionError = `Could not switch function: ${error.message}`;
+                if (this._lastState) this._render(this._lastState);
+            } else {
+                this._refresh();
+            }
+        });
+    }
+
+    _sendCommand(payload, done) {
+        const cancellable = this._cancellable;
+        Gio.DBus.session.call(BUS, PATH, BUS, 'Command',
+            new GLib.Variant('(s)', [JSON.stringify(payload)]), new GLib.VariantType('(s)'),
+            Gio.DBusCallFlags.NO_AUTO_START, 1500, cancellable, (connection, result) => {
+                if (this._cancellable !== cancellable || !this._button) return;
+                try {
+                    connection.call_finish(result);
+                    done(null);
+                } catch (error) {
+                    done(error);
+                }
+            });
     }
 
     _offline() {
         this._lastState = null;
+        this._pendingSelection = null;
         this._label.set_text('GATE · offline');
         this._details.label.set_text('Start the GATE acquisition service');
         for (const device of this._devices.values()) {

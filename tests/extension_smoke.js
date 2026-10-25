@@ -27,6 +27,7 @@ export async function run() {
     extension._timer = null;
     extension._cancellable.cancel();
     extension._cancellable = null;
+    extension._refresh = () => {};
     const snapshot = {
         status: 'Ready', recording: false, updated_utc_ns: Date.now() * 1e6,
         instruments: [
@@ -77,8 +78,43 @@ export async function run() {
     check(extension._devices.size === 1, 'Disconnected device was not removed');
     check(extension._devices.get('/dev/usbtmc3') === scope, 'Disconnect rebuilt remaining device');
     check(scope.item.menu.isOpen, 'Unrelated disconnect closed scope submenu');
+    // A primary-only function catalog exposes inactive modes. Sending the
+    // command must not relabel old voltage data as resistance while pending.
+    const fluke = {id: 'serial:///dev/fixture', name: 'FLUKE,45,fixture,1.7',
+        simulated: false, category: 'multimeter', current_function: 'VDC',
+        readings: [{channel: 'primary.VDC', value: 0.17, unit: 'V', quality: 'ok'}],
+        functions: [
+            {id: 'VDC', channel: 'primary.VDC', label: 'DC voltage', unit: 'V', configurable: true},
+            {id: 'OHMS', channel: 'primary.OHMS', label: 'Resistance', unit: 'Ω', configurable: true},
+        ]};
+    snapshot.instruments.push(fluke);
+    snapshot.controls = {};
+    extension._render(snapshot);
+    const meterDevice = extension._devices.get(fluke.id);
+    const ohms = meterDevice.channels.get('primary.OHMS').item;
+    check(ohms.label.text.includes('not active'), 'Inactive resistance mode is missing');
+    check(meterDevice.channels.size === 2, 'Unexpected secondary-display controls');
+    let sent;
+    extension._sendCommand = (payload, done) => { sent = payload; done(null); };
+    const oldSelection = extension._selected;
+    ohms.emit('activate', null);
+    check(sent.action === 'select_function' && sent.function === 'OHMS', 'Choosing resistance did not send a command');
+    check(extension._selected === oldSelection, 'Selection changed before hardware confirmed');
+    check(ohms.label.text.includes('switching'), 'Pending mode change is not indicated');
+    snapshot.controls[sent.request] = {state: 'applied', channel: 'primary.OHMS'};
+    fluke.current_function = 'OHMS';
+    fluke.readings = [{channel: 'primary.OHMS', value: 1000, unit: 'Ω', quality: 'ok'}];
+    extension._render(snapshot);
+    check(extension._selected === JSON.stringify([fluke.id,'primary.OHMS']), 'Confirmed resistance was not pinned');
+    check(extension._label.text.includes('Resistance') && extension._label.text.includes('Ω'), 'Selected resistance has wrong units');
+    check(meterDevice.channels.get('primary.OHMS').item === ohms, 'Mode change rebuilt function rows');
+    meterDevice.channels.get('primary.VDC').item.emit('activate', null);
+    snapshot.controls[sent.request] = {state: 'failed', error: 'Meter refused voltage mode'};
+    extension._render(snapshot);
+    check(extension._selected === JSON.stringify([fluke.id,'primary.OHMS']), 'Failed switch changed pinned function');
+    check(extension._details.label.text.includes('Meter refused'), 'Failed switch is hidden');
     scope.item.menu.close(false);
     extension._button.menu.close(false);
     await Scripting.sleep(300);
-    print('PASS: device grouping, stable open menus and keyboard focus across live updates, quality recovery and disconnects');
+    print('PASS: device grouping, stable open menus and keyboard focus across live updates, quality recovery, disconnects and confirmed primary-function switching');
 }

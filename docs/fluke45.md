@@ -1,6 +1,6 @@
 # Fluke 45 serial acquisition
 
-The attached Fluke 45 (main firmware 1.7, display firmware D1.0) has been identified and read successfully at **9600 baud, no parity, 8 data bits, 1 stop bit**. Both command echo modes are supported; GATE preserves the meter's echo setting, measurement functions, ranges, trigger mode, and modifiers.
+The attached Fluke 45 (main firmware 1.7, display firmware D1.0) has been identified and read successfully at **9600 baud, no parity, 8 data bits, 1 stop bit**. Both command echo modes are supported; Passive acquisition preserves the meter's settings. Explicit primary-function selections change the requested function and follow the meter's own modifier/secondary-display behavior.
 
 ## Connect
 
@@ -22,13 +22,13 @@ Or use the running service:
 gate command '{"action":"connect","resource":"serial:///dev/ttyUSB0?baud=9600"}'
 ```
 
-The meter joins live acquisition, the top bar device list, and any recording on the same host timebase as the scope. It must be reconnected after restarting the service. **Scan USB** scans USBTMC equipment; it does not send meter commands to arbitrary serial devices. A USB adapter identifies itself, not the instrument on its RS-232 cable.
+The meter joins live acquisition, the top bar device list, and any recording on the same host timebase as the scope. A successfully added serial endpoint is saved and reconnected at service startup. **Scan USB** scans USBTMC equipment; it does not send meter commands to arbitrary serial devices. A USB adapter identifies itself, not the instrument on its RS-232 cable.
 
 The account needs permission to open the serial port, typically through the `dialout` group. This was already configured on the development host. Supported baud URL values are 300, 600, 1200, 2400, 4800 and 9600; framing currently supports no parity only. Set the meter to matching settings using its front panel. A serial timeout suggests mismatched settings, a wrong cable pinout, another application using the port, or disconnected equipment.
 
 ## Readings and units
 
-The driver reads `FUNC1?`, `MOD?`, and `VAL?`. If two numeric values are returned, it reads `FUNC2?` to determine the secondary display's function. It rechecks the primary function and modifiers after reading, invalidating values if they changed mid-cycle.
+The driver reads `FUNC1?`, `MOD?`, and `VAL?`. It exposes all ten primary function modes to the top bar and agent API; selecting one sends its documented mnemonic and confirms `FUNC1?`. No secondary-display function controls are exposed. If two numeric values are returned, it reads `FUNC2?` to determine the secondary display's function. It rechecks the primary function and modifiers after reading, invalidating values if they changed mid-cycle.
 
 - Primary and secondary functions: DC/AC voltage and current, combined AC+DC, resistance, frequency, diode and continuity modes where the meter supports them.
 - Disabled secondary display: a NULL reading with quality `disabled`.
@@ -36,7 +36,7 @@ The driver reads `FUNC1?`, `MOD?`, and `VAL?`. If two numeric values are returne
 - Format 1 numeric replies and Format 2 replies with units are accepted.
 - Primary dB and power modifiers use dB and W. Modifier bits are included in the logged channel name so held, relative, minimum, and maximum readings can be distinguished from normal measurements. For example `primary.VDC.mod32` is relative DC voltage.
 
-The Fluke protocol returns command echo and an explicit completion prompt. GATE waits for the complete prompt before starting another transaction, handles command/execution errors without losing framing, and closes a timed-out connection. The host serial port stays in raw mode when closed to avoid an echo loop with the meter; the meter's own configuration is unchanged. The serial transport is implemented with Python's standard library and does not need pyserial.
+The Fluke protocol returns command echo and an explicit completion prompt. GATE waits for the complete prompt before starting another transaction, handles command/execution errors without losing framing, and closes a timed-out connection. A serial device-clear at connection discards unfinished communications without resetting measurement settings. The host serial port stays in raw mode when closed to avoid an echo loop with the meter; the meter's own configuration is unchanged. The serial transport is implemented with Python's standard library and does not need pyserial.
 
 ## Validation
 
