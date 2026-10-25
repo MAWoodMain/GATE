@@ -11,5 +11,6 @@ license = {file = "LICENSE"}
 gate = "gate.__main__:main"
 [project.entry-points."gate.drivers"]
 siglent_sds = "gate.drivers.siglent:SiglentSDS"
+fluke45 = "gate.drivers.fluke45:Fluke45"
 [tool.setuptools.packages.find]
 include = ["gate*"]

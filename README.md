@@ -2,13 +2,13 @@
 
 **Gnome Automatic Test Equipment** — a native Ubuntu bench application with live GNOME top bar measurements, instrument discovery, output control, and a shared recording timeline.
 
-This is the initial 0.1 foundation. The GTK4 desktop, D-Bus acquisition service, SQLite recorder, CSV export, extension, and simulated bench are implemented. The first hardware driver targets the **Siglent SDS1202X-E**, reading C1/C2 peak-to-peak, RMS, and frequency using SCPI over Linux USBTMC or a manually supplied TCP endpoint. USB identity and all six scalar queries have been verified against an attached SDS1202X-E running firmware 1.3.26; comparison against calibrated signals and the front panel is still pending. Waveform capture is a future addition.
+This is the initial 0.1 foundation. The GTK4 desktop, D-Bus acquisition service, SQLite recorder, CSV export, extension, and simulated bench are implemented. Hardware support includes the **Fluke 45** over RS-232 and **Siglent SDS1202X-E**, reading C1/C2 peak-to-peak, RMS, and frequency using SCPI over Linux USBTMC or a manually supplied TCP endpoint. USB identity and all six scalar queries have been verified against an attached SDS1202X-E running firmware 1.3.26; comparison against calibrated signals and the front panel is still pending. Waveform capture is a future addition.
 
 ## Equipment support
 
 | Category | Real hardware | Demo bench |
 |---|---|---|
-| Bench multimeters | Driver interface ready; model drivers pending | DC voltage |
+| Bench multimeters | Fluke 45: primary and secondary displays over RS-232, physically verified | DC voltage |
 | Bench power supplies | Driver interface ready; model drivers pending | Voltage/current readback, static voltage, stepped sweeps, output enable |
 | Oscilloscopes | SDS1202X-E scalar measurement driver, USB communication verified | Peak-to-peak and frequency |
 
@@ -38,7 +38,7 @@ The installer copies the extension to your user extension directory. Log out and
 gnome-extensions enable gate@mawoodmain.github.io
 ```
 
-The top bar displays a live measurement and recording dot. Open its menu and choose **Display measurement** to select another channel. Selection lasts for the extension session. The menu lists current measurements and opens the app. When the service stops, the indicator says offline; old samples are marked stale after five seconds. The service continues logging when you close the window.
+The top bar displays a live measurement and recording dot. Click **GATE** and expand a device dropdown under **Display measurement** to select a channel. Real instruments appear before demos; each instrument has its own dropdown with readable channel names and live values. Updates preserve open dropdowns and keyboard focus, including when a value becomes unavailable. Selection lasts for the extension session. A dot marks the selected channel, and **Open GATE** opens the app. When the service stops, the indicator says offline; old samples are marked stale after five seconds. The service continues logging when you close the window.
 
 ### Connect the SDS1202X-E over USB
 
@@ -54,7 +54,7 @@ sudo modprobe usbtmc
 
 Unplug/replug the scope, then click **Scan USB**. The rule grants access through `uaccess` to the active local seat and applies to the Siglent USB identifiers; it does not make all USB devices world-writable. Do not run the desktop or service as root. If discovery still fails, check `ls -l /dev/usbtmc*` and `getfacl /dev/usbtmcN`.
 
-To connect over a verified raw SCPI TCP endpoint, enter `tcp://HOST:5025` (or its configured port) and click **Connect**. Automatic LAN discovery, VXI-11, HiSLIP, serial, and GPIB transports are not implemented yet. This raw TCP path is tested against a local simulator, not the attached scope's LAN interface.
+To connect over a verified raw SCPI TCP endpoint, enter `tcp://HOST:5025` (or its configured port) and click **Connect**. Automatic LAN discovery, VXI-11, HiSLIP and GPIB transports are not implemented yet. Serial support currently targets the Fluke 45 prompt protocol. This raw TCP path is tested against a local simulator, not the attached scope's LAN interface.
 
 ## Try the bench without hardware
 
@@ -108,10 +108,13 @@ dbus-run-session -- python3 tests/desktop_smoke.py
 dbus-run-session -- xvfb-run -a python3 tests/desktop_smoke.py
 ```
 
-See [architecture and driver development](docs/architecture.md) and [roadmap](docs/roadmap.md).
+See [Fluke 45 setup and verification](docs/fluke45.md), [architecture and driver development](docs/architecture.md), and [roadmap](docs/roadmap.md).
+
+The GNOME menu regression can be run on GNOME 50 with `gnome-shell-test-tool --headless --disable-animations --extension PACKAGE.zip tests/extension_smoke.js` under a private `dbus-run-session`; build the extension package using `gnome-extensions pack extension`. It checks actual Shell menu actors, open state, keyboard focus, unavailable readings, recovery, and disconnects.
 
 ## Protocol references
 
+- [Fluke 45 official user manual](https://media.fluke.com/d295e628-9a14-4bb4-9784-b10800c1cf0b_original%20file.pdf): serial framing, display function queries, modifiers, and `VAL?`.
 - [Siglent SDS1000X-E product and programming resources](https://www.siglent.com/int/products-overview/sds1000x-e/)
 - [Siglent programming guide](https://int.siglent.com/u_file/download/25_11_25/SDS1000%20Series%26SDS2000X%26SDS2000X-E_ProgrammingGuide_EN02E.pdf): `*IDN?`, `C1:PAVA? PKPK`, `C1:PAVA? RMS`, `C1:PAVA? FREQ` and C2 equivalents.
 - [GNOME extension guide](https://gjs.guide/extensions/): ES module Shell extension and panel menu APIs.

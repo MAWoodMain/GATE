@@ -2,7 +2,7 @@
 
 ```text
 GTK4 application ─────┐
-GNOME Shell extension ├─ session D-Bus ─ acquisition owner ─ instrument drivers ─ SCPI transport
+GNOME Shell extension ├─ session D-Bus ─ acquisition owner ─ instrument drivers ─ SCPI / serial transport
 CLI ─────────────────┘                       │
                                              └─ SQLite WAL ─ CSV
 ```
@@ -43,7 +43,7 @@ class Meter:
         self.transport.close()
 ```
 
-Discovery probes only Linux USBTMC resources or a user-supplied endpoint with `*IDN?`; it never sends resets. Third-party drivers are trusted Python code. They must bound I/O, validate units/values, preserve instrument settings during reads, and match only hardware they implement. Driver loading errors appear in connection status.
+Discovery probes Linux USBTMC resources or a user-supplied TCP/Fluke serial endpoint with `*IDN?`; it never sends resets. Third-party drivers are trusted Python code. They must bound I/O, validate units/values, preserve instrument settings during reads, and match only hardware they implement. Driver loading errors appear in connection status.
 
 This first output API is a demo-only engine adapter. A future hardware output capability must specify units, channels, voltage/current limits, slew policy, interlocks, readback verification, and explicit output state before removing the demo guard. Don't implement a generic unverified `VOLT` write for arbitrary supplies.
 
@@ -72,3 +72,5 @@ The registry is intended to support hundreds of models without dependencies betw
 Current connection configuration and selected top-bar channel are session-only. No stored hardware commands are replayed on startup. Polling defaults to one second; there is no automatic reconnect or LAN subnet probing. A scope driver's scalar values are not waveform captures. SDS1202X-E USB scalar communication has been verified on firmware 1.3.26. Accuracy comparison, extension-in-Shell behavior, multi-hour endurance, and Ubuntu package installation still need validation.
 
 Linux USBTMC protocol and ioctl behavior follow the [kernel driver](https://github.com/torvalds/linux/blob/master/drivers/usb/class/usbtmc.c) and the local `linux/usb/tmc.h` UAPI header. Regression tests cover identity responses split across USB messages with no newline and closure after USB timeout.
+
+The Fluke 45 driver uses a separate prompt-aware serial transport and preserves front-panel configuration. See [its setup and validation notes](fluke45.md). Top bar dropdowns are stable actors keyed by device ID and channel; updates change labels and selection markers without rebuilding open menus. GNOME supports one expanded submenu in the top menu, so devices are sibling dropdowns instead of nested submenus.

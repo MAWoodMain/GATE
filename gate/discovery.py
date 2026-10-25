@@ -1,10 +1,12 @@
 from importlib.metadata import entry_points
 from pathlib import Path
 from gate.drivers.siglent import SiglentSDS
+from gate.drivers.fluke45 import Fluke45
+from gate.serial import FlukeSerial
 from gate.transport import SCPI
 
 def driver_types():
-    drivers = [SiglentSDS]
+    drivers = [SiglentSDS, Fluke45]
     for entry in entry_points(group="gate.drivers"):
         cls = entry.load()
         if cls not in drivers:
@@ -25,7 +27,7 @@ def usb_inventory():
     return result
 
 def connect(resource):
-    transport = SCPI(resource)
+    transport = FlukeSerial(resource) if resource.startswith("serial://") else SCPI(resource)
     try:
         identity = transport.query("*IDN?")
         for cls in driver_types():
