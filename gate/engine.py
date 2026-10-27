@@ -10,6 +10,7 @@ import uuid
 from dataclasses import asdict
 from pathlib import Path
 from gate import discovery
+from gate.connections import validate_resource
 from gate.drivers.simulated import Simulated
 from gate.model import Reading, MeasurementFunction
 from gate.storage import Recorder
@@ -21,6 +22,7 @@ class Engine:
         if self.profile_path and self.profile_path.exists():
             profile = json.loads(self.profile_path.read_text())
         self.saved_resources = set(profile.get("resources", []))
+        self.saved_devices = profile.get("devices", {})
         if interval is None:
             interval = float(profile.get("interval", 1.0))
         if not math.isfinite(interval) or interval < 0.1:
@@ -37,7 +39,7 @@ class Engine:
         self.wake_event = threading.Event()
         self.lock = threading.Lock()
         self.state = dict(instruments=[], recording=False, log_path="", tick=0,
-                          interval_s=self.interval, configured_resources=sorted(self.saved_resources), controls={}, commands={}, status="Ready", inventory=discovery.usb_inventory(), demo=False)
+                          interval_s=self.interval, configured_resources=sorted(self.saved_resources), saved_devices=copy.deepcopy(self.saved_devices), controls={}, commands={}, status="Ready", inventory=discovery.usb_inventory(), demo=False)
         self.thread = None
     def submit(self, action, **args):
         request = args.get("request")
@@ -90,13 +92,14 @@ class Engine:
     def save_profile(self):
         with self.lock:
             self.state["configured_resources"] = sorted(self.saved_resources)
+            self.state["saved_devices"] = copy.deepcopy(self.saved_devices)
             self.state["interval_s"] = self.interval
         if self.profile_path:
             self.profile_path.parent.mkdir(parents=True, exist_ok=True)
             temporary = self.profile_path.with_suffix(".tmp")
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as stream:
-                json.dump(dict(resources=sorted(self.saved_resources), interval=self.interval), stream)
+                json.dump(dict(resources=sorted(self.saved_resources), devices=self.saved_devices, interval=self.interval), stream)
             os.replace(temporary, self.profile_path)
 
     def command(self, action, args):
@@ -106,24 +109,54 @@ class Engine:
                 if key not in self.instruments:
                     self.instruments[key] = Simulated(category)
             self.state["demo"] = True
+        elif action == "edit_device":
+            old = args["instrument"]
+            resource = validate_resource(args["resource"])
+            if old not in self.saved_resources and old not in self.instruments:
+                raise ValueError("Unknown instrument")
+            if resource != old and (resource in self.saved_resources or resource in self.instruments):
+                raise ValueError("That connection is already configured")
+            instrument = self.instruments.pop(old, None)
+            if instrument:
+                instrument.close()
+            self.sweeps.pop(old, None)
+            details = self.saved_devices.pop(old, {})
+            self.saved_resources.discard(old)
+            self.saved_resources.add(resource)
+            self.saved_devices[resource] = details
+            self.save_profile()
+            if self.recorder:
+                self.recorder.event(time.monotonic_ns()-self.origin, old, f"edit connection: {resource}")
+            # Keep the new settings even when the instrument is currently missing.
+            return self.command("connect", dict(resource=resource))
         elif action in ("scan", "connect"):
-            resources = discovery.usb_resources() if action == "scan" else [args["resource"]]
+            resources = discovery.usb_resources() if action == "scan" else [validate_resource(args["resource"])]
             failures = []
             for resource in resources:
                 if resource in self.instruments:
-                    continue
+                    if not args.get("reconnect"):
+                        continue
+                    self.instruments.pop(resource).close()
+                    self.sweeps.pop(resource, None)
+                # Remember failed additions too, so users can correct their settings.
+                self.saved_resources.add(resource)
+                self.save_profile()
                 try:
                     instrument = discovery.connect(resource)
                     self.instruments[instrument.id] = instrument
-                    if instrument.id.startswith(("serial://", "tcp://")):
-                        self.saved_resources.add(instrument.id)
-                        self.save_profile()
+                    self.saved_resources.discard(resource)
+                    self.saved_resources.add(instrument.id)
+                    self.saved_devices.pop(resource, None)
+                    self.saved_devices[instrument.id] = dict(name=instrument.name, category=instrument.category)
+                    self.save_profile()
                 except Exception as exc:
                     failures.append(f"{resource}: {exc}")
             self.state["inventory"] = discovery.usb_inventory()
             self._status("; ".join(failures) if failures else
                          f"{len(self.instruments)} instruments connected" if resources else
                          "No USBTMC nodes accessible. Check USB permissions and usbtmc module.")
+            if failures and action == "connect":
+                raise ConnectionError("; ".join(failures))
         elif action == "disconnect":
             key = args["instrument"]
             instrument = self.instruments.pop(key, None)
@@ -132,6 +165,7 @@ class Engine:
                 self.sweeps.pop(key, None)
             if args.get("forget", True):
                 self.saved_resources.discard(key)
+                self.saved_devices.pop(key, None)
                 self.save_profile()
             if self.recorder:
                 self.recorder.event(time.monotonic_ns()-self.origin, key, "disconnect")

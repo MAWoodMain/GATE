@@ -41,7 +41,7 @@ systemctl --user enable --now gate
 ~/.local/bin/gate gui
 ```
 
-Keep the checkout in place: the installer creates an editable virtual environment inside it and a launcher in `~/.local/bin`. Add that directory to your PATH if `gate` isn't found. The service runs as your normal user. The window only adds/removes devices, shows connection status and agent access, and changes the acquisition interval; closing it leaves the service running. It discovers accessible USBTMC instruments at startup; use **Scan USB** after connecting another device. A connection failure is displayed and logged as an unavailable reading; click Scan USB to reconnect. It does not reset the instrument or change acquisition settings.
+Keep the checkout in place: the installer creates an editable virtual environment inside it and a launcher in `~/.local/bin`. Add that directory to your PATH if `gate` isn't found. The service runs as your normal user. The window follows the desktop theme and groups equipment into **TMC**, **Serial**, and **Network** settings sections. Each section has its own **Add…** dialog; TMC also has **Scan** for accessible USBTMC nodes. Serial settings include the device path and baud rate (8N1); Network settings include host and TCP port. Previously seen instruments retain their names when missing and offer **Reconnect**, connection settings (gear button), and **Forget**. Reconnect replaces an existing transport; Forget closes it and removes its saved connection. Edited settings remain saved even if the device is unavailable. Closing the window leaves the service running. **Background Service** shows service state and provides **Start**, **Stop**, and **Restart** through the current user’s systemd service, plus the acquisition interval. Stopping/restarting ends any active logging session; start logging again explicitly afterward. Controls report systemd errors in the window. It does not reset the instrument or change acquisition settings.
 
 The initial service uses a 1-second polling interval. Change it in **Service settings** or through the agent API; settings and manually added serial/TCP endpoints persist across service restarts. USBTMC equipment is rescanned at startup. Stop recording before changing interval. Slower equipment may determine the actual cycle rate.
 
@@ -67,9 +67,9 @@ sudo udevadm control --reload-rules
 sudo modprobe usbtmc
 ```
 
-Unplug/replug the scope, then click **Scan USB**. The rule grants access through `uaccess` to the active local seat and applies to the Siglent USB identifiers; it does not make all USB devices world-writable. Do not run the desktop or service as root. If discovery still fails, check `ls -l /dev/usbtmc*` and `getfacl /dev/usbtmcN`.
+Unplug/replug the scope, then click **Scan** in the TMC section. The rule grants access through `uaccess` to the active local seat and applies to the Siglent USB identifiers; it does not make all USB devices world-writable. Do not run the desktop or service as root. If discovery still fails, check `ls -l /dev/usbtmc*` and `getfacl /dev/usbtmcN`.
 
-To connect over a verified raw SCPI TCP endpoint, enter `tcp://HOST:5025` (or its configured port) and click **Connect**. Automatic LAN discovery, VXI-11, HiSLIP and GPIB transports are not implemented yet. Serial support currently targets the Fluke 45 prompt protocol. This raw TCP path is tested against a local simulator, not the attached scope's LAN interface.
+To connect over a verified raw SCPI TCP endpoint, enter the host and port (normally 5025) using **Add…** in the Network section. Agents can use `tcp://HOST:5025`. Automatic LAN discovery, VXI-11, HiSLIP and GPIB transports are not implemented yet. Serial support currently targets the Fluke 45 prompt protocol. This raw TCP path is tested against a local simulator, not the attached scope's LAN interface.
 
 ## Try the bench without hardware
 

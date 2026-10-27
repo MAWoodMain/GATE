@@ -84,13 +84,18 @@ api.command('connect', resource='serial:///dev/ttyUSB0?baud=9600')
 api.command('connect', resource='tcp://192.168.1.100:5025')
 ```
 
-USB serial adapters identify the adapter, not the meter behind it, so add serial devices by explicit address. Serial/TCP connections and the acquisition interval are saved in `$XDG_CONFIG_HOME/gate/devices.json` (normally `~/.config/gate/devices.json`) and reconnected at service startup. USBTMC devices are rescanned.
+USB serial adapters identify the adapter, not the meter behind it, so add serial devices by explicit address. TMC, serial and TCP connections, last-known device names, and the acquisition interval are saved in `$XDG_CONFIG_HOME/gate/devices.json` (normally `~/.config/gate/devices.json`) and reconnected at service startup. USBTMC devices are also rescanned. Saved devices remain visible in Settings while missing. USBTMC node numbers can change after replugging; edit the saved path or scan again if necessary.
 
 ```python
 api.command('disconnect', instrument=device_id)  # disconnect and forget saved endpoint
 api.command('disconnect', instrument=device_id, forget=False)  # disconnect for this run
+api.command('connect', resource=device_id, reconnect=True)  # close/reopen even if already connected
+api.command('edit_device', instrument=device_id,
+            resource='serial:///dev/ttyUSB0?baud=4800')  # replace saved address/settings and reconnect
 api.command('settings', interval=1.0)  # 0.1–60 seconds; stop recording first
 ```
+
+A failed add or edit keeps the new endpoint saved for correction/retry and returns a failed command result. Invalid edits or addresses already belonging to another saved instrument leave the existing connection intact. Forget removes saved metadata as well as closing the connection.
 
 The interval is a requested host polling interval, not a guarantee of sample rate or simultaneous acquisition. Inspect actual timestamps. Hardware may take longer, especially immediately after a function change. An unresponsive device is removed from acquisition; reconnect explicitly after correcting access, cable or settings problems.
 
