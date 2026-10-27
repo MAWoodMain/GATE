@@ -101,6 +101,45 @@ class ControlTests(unittest.TestCase):
             _,accepted=self.request('/v1/commands',dict(action=action,instrument='fake',command=command))
             self.assertEqual(self.completed(accepted['id'])['state'],'failed')
         self.assertEqual(calls,[('query','*IDN?'),('write','STOP')])
+    def test_physical_profiles_and_scoped_forget_through_http(self):
+        from unittest.mock import Mock, patch
+        from gate.model import MeasurementFunction
+        keys = []
+        for index in (1, 2):
+            resource = f'tcp://fixture{index}:5025'
+            device = SimpleNamespace(id=resource, name=f'FLUKE,45,{index},1.7', device_type='FLUKE:45',
+                category='multimeter', simulated=False, close=Mock(), select_function=Mock(),
+                functions=lambda:[MeasurementFunction('FREQ', 'Frequency', 'primary.FREQ', 'Hz', True)],
+                read=lambda:[Reading('primary.FREQ', 1000, 'Hz')])
+            with patch('gate.discovery.connect', return_value=device):
+                status, accepted = self.request('/v1/commands', dict(action='connect', resource=resource))
+                self.assertEqual(status, 202)
+                result = self.completed(accepted['id'])
+                self.assertEqual(result['state'], 'succeeded')
+                keys.append(result['result']['instrument'])
+            self.assertEqual(self.request('/v1/instruments/'+quote(resource, safe=''))[1]['id'], keys[-1])
+        _, accepted = self.request('/v1/commands', dict(action='instrument_settings', instrument=keys[0], name='Reference', settings={'function':'FREQ'}))
+        self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+        _, accepted = self.request('/v1/commands', dict(action='copy_settings', instrument=keys[1], source=keys[0]))
+        self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+        state = self.request('/v1/state')[1]
+        self.assertEqual(state['instrument_profiles'][keys[1]]['settings'], {'function':'FREQ'})
+        _, accepted = self.request('/v1/commands', dict(action='forget', instrument=keys[0], resource='tcp://fixture1:5025', scope='connection'))
+        self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+        self.assertIn(keys[0], self.request('/v1/state')[1]['instrument_profiles'])
+        _, accepted = self.request('/v1/commands', dict(action='forget', instrument=keys[0], scope='instrument'))
+        self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+        self.assertNotIn(keys[0], self.request('/v1/state')[1]['instrument_profiles'])
+
+    def test_top_bar_measurements_can_be_selected_and_cleared_through_http(self):
+        for functions in (['voltage', 'current', 'set_voltage'], []):
+            status, accepted = self.request('/v1/commands', dict(action='display_measurements', instrument='demo:power_supply', functions=functions))
+            self.assertEqual(status, 202)
+            self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+            state = self.request('/v1/state')[1]
+            self.assertEqual(state['instrument_profiles']['demo:power_supply']['settings']['display_functions'], functions)
+            self.assertFalse(self.engine.instruments['demo:power_supply'].enabled)
+
     def test_manifest_is_removed_when_server_stops(self):
         path=self.control.path
         self.control.close()

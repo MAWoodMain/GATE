@@ -63,7 +63,7 @@ systemctl --user daemon-reload
 systemctl --user restart gate
 ```
 
-Do not restart during recording. Agents must reread the runtime manifest after a restart because its token rotates. Settings and saved serial/TCP endpoints reconnect; no output commands are replayed.
+Do not restart during recording. Agents must reread the runtime manifest after a restart because its token rotates. Enabled connection methods reconnect and identified instruments restore their saved measurement functions. Deliberately disconnected devices remain disconnected. Instrument profiles and connections migrate automatically to schema version 2; no output commands are replayed.
 
 ## Migrating from the development checkout
 

@@ -10,6 +10,8 @@ import uuid
 from dataclasses import asdict
 from pathlib import Path
 from gate import discovery
+from gate.connections import validate_resource
+from gate.identity import identify, migrate
 from gate.drivers.simulated import Simulated
 from gate.model import Reading, MeasurementFunction
 from gate.storage import Recorder
@@ -20,7 +22,12 @@ class Engine:
         profile = {}
         if self.profile_path and self.profile_path.exists():
             profile = json.loads(self.profile_path.read_text())
-        self.saved_resources = set(profile.get("resources", []))
+        profile = migrate(profile)
+        self.saved_resources = set(profile.get("resources", [])) | set(profile['connections'])
+        self.saved_devices = profile.get("devices", {})
+        self.instrument_profiles = profile['instrument_profiles']
+        self.connections = profile['connections']
+        self.active_resources = {}
         if interval is None:
             interval = float(profile.get("interval", 1.0))
         if not math.isfinite(interval) or interval < 0.1:
@@ -37,7 +44,7 @@ class Engine:
         self.wake_event = threading.Event()
         self.lock = threading.Lock()
         self.state = dict(instruments=[], recording=False, log_path="", tick=0,
-                          interval_s=self.interval, configured_resources=sorted(self.saved_resources), controls={}, commands={}, status="Ready", inventory=discovery.usb_inventory(), demo=False)
+                          interval_s=self.interval, configured_resources=sorted(self.saved_resources), saved_devices=copy.deepcopy(self.saved_devices), instrument_profiles=copy.deepcopy(self.instrument_profiles), connections=copy.deepcopy(self.connections), controls={}, commands={}, status="Ready", inventory=discovery.usb_inventory(), demo=False)
         self.thread = None
     def submit(self, action, **args):
         request = args.get("request")
@@ -87,17 +94,164 @@ class Engine:
         self.wake_event.set()
         if self.thread:
             self.thread.join()
+    def resolve(self, key):
+        if key in self.instruments or key in self.instrument_profiles:
+            return key
+        return self.connections.get(key, {}).get('instrument') or key
+
+    def drop_connection(self, resource):
+        key = self.resolve(resource)
+        # Removing an inactive address must never interrupt another transport.
+        if self.active_resources.get(key, key) == resource:
+            instrument = self.instruments.pop(key, None)
+            if instrument:
+                instrument.close()
+            self.active_resources.pop(key, None)
+            self.sweeps.pop(key, None)
+            with self.lock:
+                self.state['instruments'] = [card for card in self.state['instruments'] if card['id'] != key]
+        return key
+
     def save_profile(self):
+        for resource in self.saved_resources:
+            connection = self.connections.setdefault(resource, dict(instrument=None, enabled=True))
+            profile = self.instrument_profiles.get(connection.get('instrument'))
+            if profile:
+                self.saved_devices[resource] = dict(name=profile['name'] or profile['identity'],
+                    category=profile.get('category', ''), instrument_id=connection['instrument'])
         with self.lock:
-            self.state["configured_resources"] = sorted(self.saved_resources)
-            self.state["interval_s"] = self.interval
+            self.state['configured_resources'] = sorted(self.saved_resources)
+            self.state['saved_devices'] = copy.deepcopy(self.saved_devices)
+            self.state['connections'] = copy.deepcopy(self.connections)
+            self.state['instrument_profiles'] = copy.deepcopy(self.instrument_profiles)
+            self.state['interval_s'] = self.interval
+            cards = {card['id']: card for card in self.state['instruments'] if card['id'] in self.instruments}
+            for key, resource in self.active_resources.items():
+                instrument = self.instruments[key]
+                profile = self.instrument_profiles[key]
+                card = cards.setdefault(key, dict(id=key, category=instrument.category,
+                    simulated=instrument.simulated, readings=[], error='', sweep=False,
+                    functions=[asdict(item) for item in self.functions(instrument)],
+                    current_function=getattr(instrument, 'current_function', None), read_duration_ms=0))
+                card.update(name=profile['name'] or instrument.name, custom_name=profile['name'], resource=resource, instrument_id=key,
+                            device_type=profile['type'], serial=profile['serial'], settings=copy.deepcopy(profile['settings']))
+            self.state['instruments'] = list(cards.values())
         if self.profile_path:
             self.profile_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.profile_path.with_suffix(".tmp")
+            temporary = self.profile_path.with_suffix('.tmp')
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as stream:
-                json.dump(dict(resources=sorted(self.saved_resources), interval=self.interval), stream)
+            with os.fdopen(fd, 'w') as stream:
+                json.dump(dict(schema_version=2, resources=sorted(self.saved_resources),
+                    devices=self.saved_devices, connections=self.connections,
+                    instrument_profiles=self.instrument_profiles, interval=self.interval), stream)
             os.replace(temporary, self.profile_path)
+
+    def function_group(self, function):
+        return function.exclusive_group or ('primary' if function.configurable else None)
+
+    def validate_settings(self, key, settings):
+        if not isinstance(settings, dict) or set(settings) - {'function', 'display_functions'}:
+            raise ValueError('Supported instrument settings: function, display_functions')
+        instrument = self.instruments.get(key)
+        functions = self.functions(instrument) if instrument else [
+            MeasurementFunction(**item) for item in self.instrument_profiles[key].get('functions', [])]
+        catalog = {item.id: item for item in functions}
+        if 'function' in settings and (not isinstance(settings['function'], str) or settings['function'] not in catalog):
+            raise ValueError('Unsupported measurement function for this instrument')
+        if 'display_functions' in settings:
+            selected = settings['display_functions']
+            if not isinstance(selected, list) or any(not isinstance(item, str) or item not in catalog for item in selected):
+                raise ValueError('display_functions must list supported measurement function IDs')
+            if len(set(selected)) != len(selected):
+                raise ValueError('Duplicate measurement function')
+            groups = [self.function_group(catalog[item]) for item in selected if self.function_group(catalog[item])]
+            if len(set(groups)) != len(groups):
+                raise ValueError('Choose only one measurement per exclusive function group')
+            if 'function' in settings:
+                function = catalog[settings['function']]
+                group = self.function_group(function)
+                if group and any(self.function_group(catalog[item]) == group and item != function.id for item in selected):
+                    raise ValueError('Saved function must match the displayed function in its exclusive group')
+
+    def apply_settings(self, instrument, settings):
+        catalog = {item.id: item for item in self.functions(instrument)}
+        chosen = []
+        if 'function' in settings:
+            if settings['function'] not in catalog:
+                raise ValueError('Saved measurement function is unsupported by this driver')
+            chosen.append(catalog[settings['function']])
+        for identity in settings.get('display_functions', []):
+            if identity not in catalog:
+                raise ValueError('Saved display function is unsupported by this driver')
+            function = catalog[identity]
+            if function.configurable:
+                chosen = [item for item in chosen if self.function_group(item) != self.function_group(function)]
+                chosen.append(function)
+        for function in chosen:
+            if function.configurable:
+                instrument.select_function(function.id)
+
+    def connect_resource(self, resource, reconnect=False, automatic=False):
+        current = self.resolve(resource)
+        if resource in self.saved_resources and automatic and not self.connections.get(resource, {}).get('enabled', True):
+            return
+        if current in self.instruments and self.active_resources.get(current, current) == resource:
+            if not reconnect:
+                return
+            self.drop_connection(resource)
+        self.saved_resources.add(resource)
+        self.connections.setdefault(resource, dict(instrument=None, enabled=True))
+        self.save_profile()
+        instrument = discovery.connect(resource)
+        address = instrument.id
+        record = identify(instrument.name, getattr(instrument, 'device_type', None))
+        # Drivers without a usable serial stay endpoint-local; never merge unrelated hardware.
+        key = record.pop('id') if record else address
+        if not record:
+            record = dict(type=getattr(instrument, 'device_type', type(instrument).__name__),
+                manufacturer='', model=instrument.name, serial=None, identity=instrument.name,
+                name='', settings={}, auto_connect=True)
+        record['category'] = instrument.category
+        record['functions'] = [asdict(item) for item in self.functions(instrument)]
+        profile = self.instrument_profiles.get(key, record)
+        if automatic and not profile.get('auto_connect', True):
+            instrument.close()
+            self.connections[resource]['instrument'] = key
+            self.connections[resource]['enabled'] = False
+            self.save_profile()
+            return
+        try:
+            self.apply_settings(instrument, profile['settings'])
+        except Exception:
+            instrument.close()
+            raise
+        previous_resource = self.active_resources.get(key)
+        previous = self.instruments.pop(key, None)
+        if previous:
+            previous.close()
+            self.sweeps.pop(key, None)
+        for connection in self.connections.values():
+            if connection.get('instrument') == key:
+                connection['enabled'] = False
+        profile.update(category=record['category'], functions=record['functions'], identity=record['identity'], auto_connect=True)
+        self.instrument_profiles[key] = profile
+        self.saved_resources.discard(resource)
+        self.saved_resources.add(address)
+        self.connections.pop(resource, None)
+        self.connections[address] = dict(instrument=key, enabled=True)
+        if address != resource:
+            self.saved_devices.pop(resource, None)
+        instrument.id = key
+        instrument.resource = address
+        if previous_resource and previous_resource != address:
+            with self.lock:
+                self.state['instruments'] = [card for card in self.state['instruments'] if card['id'] != key]
+        self.active_resources[key] = address
+        self.instruments[key] = instrument
+        if self.recorder and previous_resource != address:
+            self.recorder.event(time.monotonic_ns()-self.origin, key, f'connect: {address}')
+        self.save_profile()
+        return dict(instrument=key, resource=address)
 
     def command(self, action, args):
         if action == "demo":
@@ -105,37 +259,144 @@ class Engine:
                 key = "demo:" + category
                 if key not in self.instruments:
                     self.instruments[key] = Simulated(category)
+                    self.instrument_profiles.setdefault(key, dict(type=key, manufacturer='GATE', model=category,
+                        serial='demo', identity=self.instruments[key].name, name='', settings={}, functions=[asdict(item) for item in self.instruments[key].functions()],
+                        category=category, auto_connect=False))
+            self.save_profile()
             self.state["demo"] = True
-        elif action in ("scan", "connect"):
-            resources = discovery.usb_resources() if action == "scan" else [args["resource"]]
-            failures = []
-            for resource in resources:
-                if resource in self.instruments:
-                    continue
-                try:
-                    instrument = discovery.connect(resource)
-                    self.instruments[instrument.id] = instrument
-                    if instrument.id.startswith(("serial://", "tcp://")):
-                        self.saved_resources.add(instrument.id)
-                        self.save_profile()
-                except Exception as exc:
-                    failures.append(f"{resource}: {exc}")
-            self.state["inventory"] = discovery.usb_inventory()
-            self._status("; ".join(failures) if failures else
-                         f"{len(self.instruments)} instruments connected" if resources else
-                         "No USBTMC nodes accessible. Check USB permissions and usbtmc module.")
-        elif action == "disconnect":
-            key = args["instrument"]
-            instrument = self.instruments.pop(key, None)
-            if instrument:
-                instrument.close()
-                self.sweeps.pop(key, None)
-            if args.get("forget", True):
-                self.saved_resources.discard(key)
-                self.save_profile()
+        elif action == "edit_device":
+            old = args.get('resource_before', args['instrument'])
+            resource = validate_resource(args['resource'])
+            if old not in self.saved_resources:
+                raise ValueError('Unknown connection')
+            if resource != old and resource in self.saved_resources:
+                raise ValueError('That connection is already configured')
+            key = self.drop_connection(old)
+            details = self.saved_devices.pop(old, {})
+            connection = self.connections.pop(old, dict(instrument=None, enabled=True))
+            self.saved_resources.discard(old)
+            self.saved_resources.add(resource)
+            self.connections[resource] = connection
+            self.saved_devices[resource] = details
+            self.save_profile()
             if self.recorder:
-                self.recorder.event(time.monotonic_ns()-self.origin, key, "disconnect")
-            self._status("Device disconnected")
+                self.recorder.event(time.monotonic_ns()-self.origin, key, f'edit connection: {resource}')
+            return self.connect_resource(resource)
+        elif action in ('scan', 'connect'):
+            resources = discovery.usb_resources() if action == 'scan' else [validate_resource(args['resource'])]
+            failures, result = [], None
+            for resource in resources:
+                try:
+                    result = self.connect_resource(resource, args.get('reconnect', False), args.get('automatic', False))
+                except Exception as exc:
+                    failures.append(f'{resource}: {exc}')
+            self.state['inventory'] = discovery.usb_inventory()
+            self._status('; '.join(failures) if failures else
+                         f'{len(self.instruments)} instruments connected' if resources else
+                         'No USBTMC nodes accessible. Check USB permissions and usbtmc module.')
+            if failures and action == 'connect':
+                raise ConnectionError('; '.join(failures))
+            return result
+        elif action == 'disconnect':
+            requested = args['instrument']
+            key = self.resolve(requested)
+            resource = requested if requested in self.connections else self.active_resources.get(key, requested)
+            self.drop_connection(resource)
+            if args.get('forget', True):
+                self.saved_resources.discard(resource)
+                self.saved_devices.pop(resource, None)
+                self.connections.pop(resource, None)
+            else:
+                if resource in self.connections:
+                    self.connections[resource]['enabled'] = False
+            if key in self.instrument_profiles:
+                self.instrument_profiles[key]['auto_connect'] = any(c.get('instrument') == key and c.get('enabled') for c in self.connections.values())
+            self.save_profile()
+            if self.recorder:
+                self.recorder.event(time.monotonic_ns()-self.origin, key, 'disconnect')
+            self._status('Device disconnected')
+        elif action == 'forget':
+            scope = args['scope']
+            if scope not in ('connection', 'instrument'):
+                raise ValueError('Choose connection or instrument')
+            requested = args['instrument']
+            key = self.resolve(requested)
+            if scope == 'connection':
+                resource = args.get('resource', requested)
+                if resource not in self.connections:
+                    raise ValueError('Unknown connection')
+                if requested in self.instrument_profiles and self.resolve(resource) != key:
+                    raise ValueError('Connection belongs to a different instrument')
+                return self.command('disconnect', dict(instrument=resource, forget=True))
+            if key not in self.instrument_profiles:
+                raise ValueError('Unknown instrument')
+            for resource in list(self.connections):
+                if self.connections[resource].get('instrument') == key:
+                    self.drop_connection(resource)
+                    self.connections.pop(resource)
+                    self.saved_resources.discard(resource)
+                    self.saved_devices.pop(resource, None)
+            orphan = self.instruments.pop(key, None)
+            if orphan:
+                orphan.close()
+            self.active_resources.pop(key, None)
+            self.sweeps.pop(key, None)
+            self.instrument_profiles.pop(key)
+            self.save_profile()
+            self._status('Instrument and its settings forgotten')
+        elif action == 'display_measurements':
+            key = self.resolve(args['instrument'])
+            profile = self.instrument_profiles[key]
+            settings = copy.deepcopy(profile['settings'])
+            settings['display_functions'] = copy.deepcopy(args['functions'])
+            instrument = self.instruments.get(key)
+            catalog = {item['id']: MeasurementFunction(**item) for item in profile.get('functions', [])}
+            if instrument:
+                catalog = {item.id: item for item in self.functions(instrument)}
+            if isinstance(settings['display_functions'], list):
+                for identity in settings['display_functions']:
+                    if isinstance(identity, str) and identity in catalog and catalog[identity].configurable:
+                        settings['function'] = identity
+            self.validate_settings(key, settings)
+            # Hiding never changes hardware configuration. Only newly checked
+            # configurable functions switch a device, and must confirm before saving.
+            for identity in settings['display_functions']:
+                function = catalog[identity]
+                if function.configurable:
+                    if instrument and identity not in profile['settings'].get('display_functions', []) and getattr(instrument, 'current_function', None) != identity:
+                        instrument.select_function(identity)
+                    settings['function'] = identity
+            profile['settings'] = settings
+            self.save_profile()
+            if self.recorder:
+                self.recorder.event(time.monotonic_ns()-self.origin, key, f'display_measurements: {settings["display_functions"]}')
+            self._status('Top-bar measurements saved')
+            return dict(instrument=key, functions=settings['display_functions'])
+        elif action in ('instrument_settings', 'copy_settings'):
+            key = self.resolve(args['instrument'])
+            profile = self.instrument_profiles[key]
+            if action == 'copy_settings':
+                source = self.instrument_profiles[self.resolve(args['source'])]
+                if source['type'] != profile['type']:
+                    raise ValueError('Settings can only be copied between instruments of the same type')
+                settings = copy.deepcopy(source['settings'])
+                name = profile['name']
+            else:
+                settings = copy.deepcopy(args.get('settings', profile['settings']))
+                name = args.get('name', profile['name'])
+                if not isinstance(name, str) or len(name.strip()) > 80 or any(ord(c) < 32 for c in name):
+                    raise ValueError('Instrument name must be at most 80 printable characters')
+                name = name.strip()
+            self.validate_settings(key, settings)
+            instrument = self.instruments.get(key)
+            if instrument and settings != profile['settings']:
+                self.apply_settings(instrument, settings)
+            profile.update(name=name, settings=settings)
+            self.save_profile()
+            if self.recorder:
+                self.recorder.event(time.monotonic_ns()-self.origin, key, f'{action}: {settings}')
+            self._status('Instrument settings saved')
+            return dict(instrument=key, settings=settings, name=name)
         elif action == "settings":
             interval = float(args["interval"])
             if not math.isfinite(interval) or not .1 <= interval <= 60:
@@ -149,11 +410,21 @@ class Engine:
             request = str(args.get("request") or uuid.uuid4())
             result = dict(instrument=args.get("instrument"), function=args.get("function"))
             try:
-                instrument = self.instruments[args["instrument"]]
+                instrument = self.instruments[self.resolve(args["instrument"])]
                 functions = {function.id: function for function in self.functions(instrument)}
                 function = functions[args["function"]]
                 if function.configurable:
                     instrument.select_function(function.id)
+                profile = self.instrument_profiles.get(instrument.id)
+                if profile is not None:
+                    profile['settings']['function'] = function.id
+                    displayed = profile['settings'].get('display_functions')
+                    group = self.function_group(function)
+                    if displayed is not None and group and any(
+                            self.function_group(functions[item]) == group for item in displayed if item in functions):
+                        profile['settings']['display_functions'] = [item for item in displayed
+                            if item in functions and self.function_group(functions[item]) != group] + [function.id]
+                    self.save_profile()
                 if self.recorder:
                     self.recorder.event(time.monotonic_ns()-self.origin, instrument.id,
                                         f"select_function: {function.id}")
@@ -167,7 +438,7 @@ class Engine:
                 while len(self.state["controls"]) > 100:
                     del self.state["controls"][next(iter(self.state["controls"]))]
         elif action in ("query", "write"):
-            instrument = self.instruments[args["instrument"]]
+            instrument = self.instruments[self.resolve(args["instrument"])]
             transport = getattr(instrument, "transport", None)
             if transport is None:
                 raise ValueError("This instrument has no raw command transport")
@@ -197,7 +468,7 @@ class Engine:
                 self.recorder = None
             self.state["recording"] = False
         elif action in ("static", "sweep", "output", "cancel_sweep"):
-            instrument = self.instruments[args["instrument"]]
+            instrument = self.instruments[self.resolve(args["instrument"])]
             if instrument.category != "power_supply" or not instrument.simulated:
                 raise ValueError("Output control currently supported on the demo PSU only")
             if action == "static":
@@ -261,7 +532,11 @@ class Engine:
             if self.recorder:
                 for reading in readings:
                     self.recorder.sample(self.tick, tick_ns, key, reading, start, end)
-            cards.append(dict(id=key, name=instrument.name, category=instrument.category,
+            profile = self.instrument_profiles.get(key, {})
+            cards.append(dict(id=key, name=profile.get('name') or instrument.name, custom_name=profile.get('name', ''),
+                              resource=self.active_resources.get(key, key), instrument_id=key,
+                              device_type=profile.get('type'), serial=profile.get('serial'),
+                              settings=copy.deepcopy(profile.get('settings', {})), category=instrument.category,
                               simulated=instrument.simulated, readings=[asdict(r) for r in readings],
                               error=error, sweep=key in self.sweeps,
                               functions=[asdict(function) for function in self.functions(instrument, readings)],
@@ -271,6 +546,7 @@ class Engine:
                 instrument.close()
                 self.sweeps.pop(key, None)
                 del self.instruments[key]
+                self.active_resources.pop(key, None)
         if self.recorder:
             self.recorder.flush()
         with self.lock:

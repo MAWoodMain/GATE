@@ -1,177 +1,549 @@
-"""GATE device management and settings; monitoring lives in GNOME Shell."""
+"""Ubuntu-style device and service settings; monitoring lives in GNOME Shell."""
 import json
-import subprocess
+import os
+import uuid
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 import gi
 gi.require_version('Gtk', '4.0')
 from gi.repository import Gio, GLib, Gtk
+from gate.connections import communication_type, validate_resource
 from gate.service import BUS, PATH
 from gate.resources import documentation
 
+# Keep the desktop's light/dark theme and Ubuntu accent colours.
 CSS = b'''
-window { background: #111820; color: #edf4fa; }
-headerbar { background: #18232e; }
-.hero { font-size: 28px; font-weight: 800; }
-.muted { color: #9eafbd; }
-.card { background: #1c2935; border-radius: 14px; padding: 18px; }
-.tag { color: #67e8bc; font-weight: bold; }
+.settings-title { font-size: 26px; font-weight: bold; }
+.section-title { font-size: 16px; font-weight: bold; }
+.settings-list { border-radius: 12px; border: 1px solid alpha(@theme_fg_color, 0.12); }
+.settings-list > row { padding: 16px; }
+.settings-list > row:first-child { border-top-left-radius: 12px; border-top-right-radius: 12px; }
+.settings-list > row:last-child { border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }
+.device-title { font-weight: bold; }
 '''
+
 
 class Window(Gtk.ApplicationWindow):
     def __init__(self, application):
         super().__init__(application=application, title='GATE · Devices & Settings',
-                         default_width=900, default_height=760)
-        self.pending = False
-        self.closed = False
+                         default_width=900, default_height=820)
+        self.pending = self.closed = self.syncing = self.interval_dirty = False
+        self.online = False
         self.ids = None
-        self.labels = {}
-        self.titles = {}
-        self.interval_dirty = False
-        self.syncing = False
+        self.row_kinds = {}
+        self.labels, self.titles, self.device_actions = {}, {}, {}
+        self.requests = set()
+        self.view_state = {}
+        self.connect_buttons = {}
+        self.connected = set()
+        self.service_busy = self.service_check_pending = False
+        self.service_state = 'Checking…'
         provider = Gtk.CssProvider()
         provider.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_display(self.get_display(), provider, 600)
-        header = Gtk.HeaderBar()
-        self.set_titlebar(header)
-        header.pack_start(self.button('Scan USB', lambda: self.command('scan')))
-        scroll = Gtk.ScrolledWindow()
+        self.set_titlebar(Gtk.HeaderBar())
+        scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
         self.set_child(scroll)
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18,
-                        margin_top=26, margin_bottom=26, margin_start=26, margin_end=26)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=28,
+                        margin_top=28, margin_bottom=28, margin_start=32, margin_end=32)
+        outer.set_halign(Gtk.Align.CENTER)
+        outer.set_hexpand(True)
         scroll.set_child(outer)
-        outer.append(self.label('Devices & Settings', 'hero'))
-        outer.append(self.label('Manage your bench here. Monitor measurements in the top bar; agents control the service.', 'muted'))
-        self.status = self.label('Connecting to the GATE service…', 'muted')
-        outer.append(self.status)
+        outer.append(self.label('Devices & Settings', 'settings-title'))
+        intro = self.label('Manage your equipment and background service. Follow measurements in the top bar.', 'dim-label')
+        outer.append(intro)
+        self.message = self.label('', 'dim-label')
+        self.message.set_visible(False)
+        outer.append(self.message)
+        self.sections = {}
+        self.section_controls = []
+        for kind, subtitle in (
+                ('TMC', 'USB instruments using the Test & Measurement Class'),
+                ('Serial', 'Serial instruments and USB serial adapters'),
+                ('Network', 'Instruments with a raw SCPI TCP connection')):
+            section, rows = self.section(kind, subtitle, outer)
+            controls = Gtk.Box(spacing=6)
+            if kind == 'TMC':
+                scan = self.button('Scan', lambda: self.command('scan'))
+                controls.append(scan)
+                self.section_controls.append(scan)
+            add = self.button('Add…', lambda kind=kind: self.edit_connection(kind))
+            controls.append(add)
+            self.section_controls.append(add)
+            section.append(controls)
+            self.sections[kind] = rows
+        self.saved_section, self.sections['Saved'] = self.section('Saved Instruments', 'Instrument profiles without a saved connection', outer)
+        self.saved_section.get_parent().set_visible(False)
+        self.demo_section, self.sections['Demo'] = self.section('Demo instruments', 'Simulated equipment for development', outer)
+        self.demo_section.get_parent().set_visible(False)
+        _, service = self.section('Background Service', 'Acquisition and agent access continue when this window is closed.', outer)
+        self.service_status = self.label('Checking…', 'dim-label')
+        actions = Gtk.Box(spacing=6)
+        self.service_buttons = {}
+        for action in ('start', 'stop', 'restart'):
+            button = self.button(action.title(), lambda action=action: self.service_action(action))
+            actions.append(button)
+            self.service_buttons[action] = button
+        service.append(self.setting_row('GATE service', self.service_status, actions))
+        self.status = self.label('Connecting…', 'dim-label')
+        service.append(self.setting_row('Acquisition', self.status))
         row = Gtk.Box(spacing=8)
-        self.resource = Gtk.Entry(placeholder_text='USB, TCP or serial instrument address', hexpand=True)
-        row.append(self.resource)
-        row.append(self.button('Add device', lambda: self.command('connect',resource=self.resource.get_text().strip())))
-        outer.append(row)
-        outer.append(self.label('Examples: /dev/usbtmc3  ·  tcp://192.168.1.100:5025  ·  serial:///dev/ttyUSB0?baud=9600', 'muted'))
-        self.cards = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        outer.append(self.cards)
-        settings = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=10)
-        settings.add_css_class('card')
-        settings.append(self.label('Service settings', 'tag'))
-        row = Gtk.Box(spacing=10)
-        row.append(self.label('Acquisition interval (seconds)'))
-        self.interval = Gtk.SpinButton.new_with_range(.1,60,.1)
+        self.interval = Gtk.SpinButton.new_with_range(.1, 60, .1)
+        self.interval.set_digits(1)
         self.interval.set_value(1)
-        self.interval.connect('value-changed',self.interval_changed)
+        self.interval.connect('value-changed', self.interval_changed)
         row.append(self.interval)
-        row.append(self.button('Apply',lambda:self.command('settings',interval=self.interval.get_value())))
-        settings.append(row)
-        settings.append(self.label('Devices share a host timebase. Actual timing depends on instrument response time.', 'muted'))
-        outer.append(settings)
-        agent = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=10)
-        agent.add_css_class('card')
-        agent.append(self.label('Agent access', 'tag'))
-        self.api = self.label('Waiting for service…', 'muted')
-        agent.append(self.api)
-        guide = str(documentation('AGENT_INSTRUMENT_GUIDE.md'))
-        agent.append(self.button('Open agent guide',lambda:Gio.AppInfo.launch_default_for_uri(Path(guide).as_uri(),None)))
-        outer.append(agent)
-        row = Gtk.Box(spacing=10)
-        row.append(self.button('Add demo devices',lambda:self.command('demo')))
-        row.append(self.button('Start background service',self.start_service))
-        outer.append(row)
-        outer.append(self.label('Closing this window leaves acquisition and agent access running.', 'muted'))
-        self.connect('close-request',self.on_close)
-        self.set_focus(self.resource)
-        self.timer = GLib.timeout_add(1000,self.refresh)
+        self.apply_interval = self.button('Apply', lambda: self.command('settings', interval=self.interval.get_value()))
+        row.append(self.apply_interval)
+        service.append(self.setting_row('Acquisition interval', self.label('Seconds between host polling cycles', 'dim-label'), row))
+        _, agent = self.section('Agent Access', 'Agents control instruments and coordinate logging through the local API.', outer)
+        self.api = self.label('Waiting for service…', 'dim-label')
+        agent.append(self.setting_row('Control API', self.api))
+        guide = documentation('AGENT_INSTRUMENT_GUIDE.md')
+        agent.append(self.setting_row('Instrument guide', self.label('Connection, measurement and logging commands', 'dim-label'),
+                     self.button('Open', lambda: Gio.AppInfo.launch_default_for_uri(Path(guide).as_uri(), None))))
+        self.demo_button = self.button('Add demo instruments', lambda: self.command('demo'))
+        self.demo_button.set_halign(Gtk.Align.START)
+        outer.append(self.demo_button)
+        self.connect('close-request', self.on_close)
+        # Show remembered devices even if the service was stopped before opening settings.
+        profile = Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home()/'.config'))) / 'gate/devices.json'
+        try:
+            saved = json.loads(profile.read_text())
+            self.render_devices(dict(instruments=[], configured_resources=saved.get('resources', []),
+                                     saved_devices=saved.get('devices', {}), connections=saved.get('connections', {}),
+                                     instrument_profiles=saved.get('instrument_profiles', {})))
+        except (OSError, ValueError, TypeError):
+            pass
+        self.timer = GLib.timeout_add(1000, self.refresh)
         self.refresh()
 
-    def label(self,text,css=None):
-        label=Gtk.Label(label=text,xalign=0,wrap=True,selectable=css!='hero')
-        if css:label.add_css_class(css)
+    def label(self, text, css=None):
+        label = Gtk.Label(label=text, xalign=0, wrap=True)
+        label.set_max_width_chars(66)
+        if css:
+            label.add_css_class(css)
         return label
-    def button(self,text,callback):
-        button=Gtk.Button(label=text)
-        button.connect('clicked',lambda *_:callback())
+
+    def button(self, text, callback):
+        button = Gtk.Button(label=text, valign=Gtk.Align.CENTER)
+        button.connect('clicked', lambda *_: callback())
         return button
-    def interval_changed(self,*args):
-        if not self.syncing:self.interval_dirty=True
-    def start_service(self):
-        subprocess.Popen(['systemctl','--user','start','gate'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-        self.status.set_text('Starting background service…')
-    def on_close(self,*args):
-        self.closed=True
+
+    def section(self, title, subtitle, outer):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        heading = Gtk.Box(spacing=12)
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, hexpand=True)
+        text.append(self.label(title, 'section-title'))
+        text.append(self.label(subtitle, 'dim-label'))
+        heading.append(text)
+        box.append(heading)
+        rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, show_separators=True)
+        rows.add_css_class('settings-list')
+        box.append(rows)
+        outer.append(box)
+        return heading, rows
+
+    def setting_row(self, title, subtitle, actions=None):
+        row = Gtk.Box(spacing=16)
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5, hexpand=True)
+        title_label = self.label(title, 'device-title')
+        text.append(title_label)
+        text.append(subtitle)
+        row.append(text)
+        if actions:
+            row.append(actions)
+        return row
+
+    def notify(self, text):
+        self.message.set_text(text)
+        self.message.set_visible(bool(text))
+
+    def interval_changed(self, *args):
+        if not self.syncing:
+            self.interval_dirty = True
+
+    def run_systemctl(self, arguments, callback):
+        try:
+            process = Gio.Subprocess.new(['systemctl', '--user', *arguments],
+                         Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE)
+            def finished(process, result):
+                try:
+                    _, stdout, stderr = process.communicate_utf8_finish(result)
+                    callback(process.get_successful(), stdout.strip(), stderr.strip())
+                except Exception as exc:
+                    callback(False, '', str(exc))
+            process.communicate_utf8_async(None, None, finished)
+        except Exception as exc:
+            callback(False, '', str(exc))
+
+    def service_action(self, action):
+        self.service_busy = True
+        self.update_sensitivity()
+        self.notify(dict(start='Starting', stop='Stopping', restart='Restarting')[action] + ' background service…')
+        def finished(ok, output, error):
+            self.service_busy = False
+            if self.closed:
+                return
+            self.notify(f'Background service {dict(start="started", stop="stopped", restart="restarted")[action]}.' if ok
+                        else f'Unable to {action} service: {error or output}')
+            self.refresh()
+        self.run_systemctl([action, 'gate.service'], finished)
+
+    def update_sensitivity(self):
+        for action, button in self.service_buttons.items():
+            button.set_sensitive(not self.service_busy and (action == 'restart' or
+                                 (not self.online if action == 'start' else self.online or self.service_state in ('active', 'activating'))))
+        for button in self.section_controls + [self.apply_interval, self.interval, self.demo_button]:
+            button.set_sensitive(self.online and not self.service_busy)
+        for actions in self.device_actions.values():
+            actions.set_sensitive(self.online and not self.service_busy)
+
+    def on_close(self, *args):
+        self.closed = True
         GLib.source_remove(self.timer)
         return False
-    def bus_call(self,method,payload,callback):
-        connection=Gio.bus_get_sync(Gio.BusType.SESSION,None)
-        params=GLib.Variant('(s)',(json.dumps(payload),)) if payload is not None else None
-        def finished(conn,result):
-            try:
-                callback(json.loads(conn.call_finish(result).unpack()[0]),None)
-            except Exception as exc:
-                callback(None,exc)
-        connection.call(BUS,PATH,BUS,method,params,GLib.VariantType.new('(s)'),
-                        Gio.DBusCallFlags.NONE,2000,None,finished)
-    def command(self,action,**args):
-        if action=='settings':self.interval_dirty=False
-        self.bus_call('Command',dict(action=action,**args),
-                      lambda value,error:self.status.set_text(str(error) if error else 'Change queued'))
-    def refresh(self):
-        if self.pending or self.closed:return not self.closed
-        self.pending=True
-        def updated(state,error):
-            self.pending=False
-            if self.closed:return
-            if error:
-                self.status.set_text('Background service offline. Start it to manage devices.')
-                self.api.set_text('Agent control API is offline')
-                for label in self.labels.values():label.set_text('Service offline')
+
+    def bus_call(self, method, payload, callback):
+        try:
+            connection = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            params = GLib.Variant('(s)', (json.dumps(payload),)) if payload is not None else None
+            def finished(conn, result):
+                try:
+                    value = json.loads(conn.call_finish(result).unpack()[0])
+                except Exception as exc:
+                    callback(None, exc)
+                    return
+                callback(value, None)
+            connection.call(BUS, PATH, BUS, method, params, GLib.VariantType.new('(s)'),
+                            Gio.DBusCallFlags.NO_AUTO_START, 2000, None, finished)
+        except Exception as exc:
+            callback(None, exc)
+
+    def command(self, action, **args):
+        request = str(uuid.uuid4())
+        self.requests.add(request)
+        def queued(value, error):
+            if self.closed:
                 return
-            self.status.set_text(state['status'] + (' · Recording active' if state['recording'] else ''))
-            if not self.interval_dirty:
-                self.syncing=True
-                self.interval.set_value(state.get('interval_s',1))
-                self.syncing=False
-            control=state.get('control_api')
-            self.api.set_text((f"Control API: {control['url']}\nAuthentication: private local token\nAdvanced instrument commands: {'enabled' if control['allow_raw'] else 'disabled'}")
-                              if control else 'Agent control API is disabled')
-            live={device['id']:device for device in state['instruments']}
-            ids=sorted(set(live)|set(state.get('configured_resources',[])))
-            if ids!=self.ids:
-                while self.cards.get_first_child():self.cards.remove(self.cards.get_first_child())
-                self.labels={}
-                self.titles={}
-                for identity in ids:
-                    device=live.get(identity)
-                    box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=8)
-                    box.add_css_class('card')
-                    title=device['name'] if device else 'Saved instrument'
-                    title_label=self.label(title,'tag')
-                    self.titles[identity]=title_label
-                    box.append(title_label)
-                    box.append(self.label(identity,'muted'))
-                    label=self.label('','muted')
-                    self.labels[identity]=label
-                    box.append(label)
-                    actions=Gtk.Box(spacing=8)
-                    actions.append(self.button('Reconnect',lambda resource=identity:self.command('connect',resource=resource)))
-                    actions.append(self.button('Remove device',lambda resource=identity:self.command('disconnect',instrument=resource)))
-                    box.append(actions)
-                    self.cards.append(box)
-                if not ids:self.cards.append(self.label('No devices configured. Scan USB or add an instrument by address.','muted'))
-                self.ids=ids
-            for identity in ids:
-                device=live.get(identity)
-                self.titles[identity].set_text(device['name'] if device else 'Saved instrument')
-                if not device:
-                    text='Saved · disconnected'
-                elif device['error']:
-                    text='Connection error: '+device['error']
-                else:
-                    count=len(device.get('functions',[]))
-                    text=f"{'Demo' if device['simulated'] else 'Connected'} · {device['category'].replace('_',' ')} · {count} measurement {'function' if count == 1 else 'functions'}"
-                self.labels[identity].set_text(text)
-        self.bus_call('Snapshot',None,updated)
+            if error:
+                self.requests.discard(request)
+                self.notify(str(error))
+            else:
+                if action == 'settings':
+                    self.interval_dirty = False
+                self.notify('Change queued…')
+        self.bus_call('Command', dict(action=action, request=request, **args), queued)
+
+    def icon_button(self, icon, tooltip, callback):
+        button = Gtk.Button.new_from_icon_name(icon)
+        button.set_valign(Gtk.Align.CENTER)
+        button.set_tooltip_text(tooltip)
+        button.update_property([Gtk.AccessibleProperty.LABEL], [tooltip])
+        button.connect('clicked', lambda *_: callback())
+        return button
+
+    def make_dialog(self, title):
+        dialog = Gtk.Dialog(title=title, transient_for=self, modal=True, default_width=560)
+        content = dialog.get_content_area()
+        content.set_spacing(12)
+        for setter in (content.set_margin_top, content.set_margin_bottom, content.set_margin_start, content.set_margin_end):
+            setter(24)
+        return dialog, content
+
+    def connection_fields(self, kind, identity, content):
+        fields = {}
+        url = urlsplit(identity or '')
+        def entry(title, value, hint):
+            content.append(self.label(title, 'device-title'))
+            widget = Gtk.Entry(text=value, placeholder_text=hint, activates_default=True)
+            content.append(widget)
+            return widget
+        if kind == 'Serial':
+            fields['path'] = entry('Device path', url.path if identity else '', '/dev/serial/by-id/… or /dev/ttyUSB0')
+            content.append(self.label('Baud rate', 'device-title'))
+            rates = ['300', '600', '1200', '2400', '4800', '9600']
+            baud = Gtk.DropDown.new_from_strings(rates)
+            current = parse_qs(url.query).get('baud', ['9600'])[0]
+            baud.set_selected(rates.index(current) if current in rates else 5)
+            content.append(baud)
+            content.append(self.label('8 data bits · No parity · 1 stop bit. Prefer a stable /dev/serial/by-id/ path.', 'dim-label'))
+        elif kind == 'Network':
+            fields['host'] = entry('Host or IP address', url.hostname or '', '192.168.1.100')
+            fields['port'] = entry('TCP port', str(url.port or 5025), '5025')
+            content.append(self.label('Raw SCPI TCP connections. Automatic LAN discovery is not available.', 'dim-label'))
+        else:
+            fields['path'] = entry('TMC device path', identity or '', '/dev/usbtmc0')
+            content.append(self.label('Use Scan in the TMC section to find accessible USB instruments.', 'dim-label'))
+        def read():
+            if kind == 'Serial':
+                resource = f"serial://{fields['path'].get_text().strip()}?baud={rates[baud.get_selected()]}"
+            elif kind == 'Network':
+                host = fields['host'].get_text().strip()
+                if ':' in host and not host.startswith('['):
+                    host = f'[{host}]'
+                port = int(fields['port'].get_text())
+                if not 1 <= port <= 65535:
+                    raise ValueError('TCP port must be 1–65535')
+                resource = f'tcp://{host}:{port}'
+            else:
+                resource = fields['path'].get_text().strip()
+            resource = validate_resource(resource)
+            if communication_type(resource) != kind:
+                raise ValueError(f'Enter a {kind} connection address')
+            return resource
+        return read
+
+    def edit_connection(self, kind, identity=None):
+        dialog, content = self.make_dialog('Connection Settings' if identity else f'Add {kind} Instrument')
+        dialog.add_button('Cancel', Gtk.ResponseType.CANCEL)
+        dialog.add_button('Save & Connect' if identity else 'Add Instrument', Gtk.ResponseType.ACCEPT).add_css_class('suggested-action')
+        read = self.connection_fields(kind, identity, content)
+        error = self.label('', 'error')
+        content.append(error)
+        def response(dialog, response):
+            if response == Gtk.ResponseType.ACCEPT:
+                try:
+                    resource = read()
+                except ValueError as exc:
+                    error.set_text(str(exc))
+                    return
+                self.command('edit_device', instrument=identity, resource=resource) if identity else self.command('connect', resource=resource)
+            dialog.destroy()
+        dialog.connect('response', response)
+        dialog.set_default_response(Gtk.ResponseType.ACCEPT)
+        dialog.present()
+        return dialog
+
+    def connection_toggle(self, resource):
+        if resource in self.connected:
+            self.command('disconnect', instrument=resource, forget=False)
+        elif resource.startswith('demo:'):
+            self.command('demo')
+        else:
+            self.command('connect', resource=resource)
+
+    def profile_for(self, resource):
+        connection = self.view_state.get('connections', {}).get(resource, {})
+        key = connection.get('instrument') or resource
+        profile = self.view_state.get('instrument_profiles', {}).get(key)
+        return key, profile
+
+    def device_settings(self, resource):
+        key, profile = self.profile_for(resource)
+        dialog, content = self.make_dialog('Device Settings')
+        dialog.add_button('Close', Gtk.ResponseType.CLOSE)
+        dialog.connect('response', lambda dialog, _: dialog.destroy())
+        tabs = Gtk.Notebook()
+        content.append(tabs)
+        connection_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=16)
+        tabs.append_page(connection_page, Gtk.Label(label='Connection'))
+        if resource in self.view_state.get('configured_resources', []) and not resource.startswith('demo:'):
+            read = self.connection_fields(communication_type(resource), resource, connection_page)
+            error = self.label('', 'error')
+            connection_page.append(error)
+            def save_connection():
+                try:
+                    replacement = read()
+                except ValueError as exc:
+                    error.set_text(str(exc))
+                    return
+                self.command('edit_device', instrument=resource, resource=replacement)
+                dialog.destroy()
+            connection_page.append(self.button('Save Connection & Connect', save_connection))
+            connection_page.append(self.label('Address and communication options apply only to this connection. Instrument settings are matched after identification.', 'dim-label'))
+        else:
+            connection_page.append(self.label('No physical connection settings. Add a connection in TMC, Serial or Network to identify an instrument.', 'dim-label'))
+        instrument_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=16)
+        tabs.append_page(instrument_page, Gtk.Label(label='Instrument'))
+        if profile:
+            instrument_page.append(self.label(f"{profile['type']} · Serial: {profile.get('serial') or 'Unavailable (connection-local identity)'}", 'dim-label'))
+            instrument_page.append(self.label('Instrument name', 'device-title'))
+            name = Gtk.Entry(text=profile.get('name', ''), placeholder_text='Use model name', max_length=80)
+            instrument_page.append(name)
+            instrument_page.append(self.label('Measurement function', 'device-title'))
+            functions = profile.get('functions', [])
+            selected = profile.get('settings', {}).get('function')
+            choices = ['Keep current instrument function'] + [item['label'] for item in functions]
+            function = Gtk.DropDown.new_from_strings(choices)
+            function.set_selected(next((index+1 for index, item in enumerate(functions) if item['id'] == selected), 0))
+            instrument_page.append(function)
+            instrument_page.append(self.label('Names and saved functions follow this instrument across all connections. Saved functions are reapplied when it connects.', 'dim-label'))
+            def save_instrument():
+                index = function.get_selected()
+                settings = dict(profile.get('settings', {}))
+                settings.pop('function', None)
+                if index:
+                    chosen = functions[index-1]
+                    settings['function'] = chosen['id']
+                    group = chosen.get('exclusive_group') or ('primary' if chosen.get('configurable') else None)
+                    catalog = {item['id']:item for item in functions}
+                    def same_group(identity):
+                        item = catalog.get(identity, {})
+                        return group and (item.get('exclusive_group') or ('primary' if item.get('configurable') else None)) == group
+                    shown = settings.get('display_functions')
+                    if shown is not None and any(same_group(identity) for identity in shown):
+                        settings['display_functions'] = [identity for identity in shown if not same_group(identity)] + [chosen['id']]
+                self.command('instrument_settings', instrument=key, name=name.get_text(), settings=settings)
+                dialog.destroy()
+            instrument_page.append(self.button('Save Instrument Settings', save_instrument))
+            sources = [(identity, item) for identity, item in self.view_state.get('instrument_profiles', {}).items()
+                       if identity != key and item['type'] == profile['type']]
+            instrument_page.append(self.label('Copy settings from the same instrument type', 'device-title'))
+            if sources:
+                source = Gtk.DropDown.new_from_strings([f"{item.get('name') or item['model']} · {item.get('serial') or identity}" for identity, item in sources])
+                instrument_page.append(source)
+                def copy_settings():
+                    self.command('copy_settings', instrument=key, source=sources[source.get_selected()][0])
+                    dialog.destroy()
+                instrument_page.append(self.button('Copy Instrument Settings', copy_settings))
+                instrument_page.append(self.label('Copies measurement settings only. Names, serial numbers and connections stay with their instruments.', 'dim-label'))
+            else:
+                instrument_page.append(self.label('No other saved instrument of this type.', 'dim-label'))
+        else:
+            instrument_page.append(self.label('Connect first to identify the model and serial number. Instrument settings are kept separately once identified.', 'dim-label'))
+        if resource not in self.view_state.get('configured_resources', []):
+            tabs.set_current_page(1)
+        dialog.present()
+        return dialog
+
+    def forget_device(self, resource):
+        key, profile = self.profile_for(resource)
+        dialog, content = self.make_dialog('Forget Device')
+        content.append(self.label('What would you like to forget?', 'section-title'))
+        content.append(self.label((profile.get('name') or profile['identity']) if profile else resource, 'device-title'))
+        if profile and resource != key:
+            content.append(self.label(resource, 'dim-label'))
+        content.append(self.label('Remove Connection removes only this address and its communication settings. The instrument name and measurement settings are kept.', 'dim-label'))
+        content.append(self.label('Forget Instrument removes its name, measurement settings and all saved connection methods. Recorded data is kept.', 'dim-label'))
+        dialog.add_button('Cancel', Gtk.ResponseType.CANCEL)
+        if resource in self.view_state.get('configured_resources', []):
+            dialog.add_button('Remove Connection', 1)
+        if profile:
+            dialog.add_button('Forget Instrument', 2).add_css_class('destructive-action')
+        dialog.set_default_response(Gtk.ResponseType.CANCEL)
+        def response(dialog, response):
+            if response == 1:
+                self.command('forget', instrument=key, resource=resource, scope='connection')
+            elif response == 2:
+                self.command('forget', instrument=key, scope='instrument')
+            dialog.destroy()
+        dialog.connect('response', response)
+        dialog.present()
+        return dialog
+
+    def render_devices(self, state):
+        self.view_state = state
+        profiles = state.get('instrument_profiles', {})
+        connections = state.get('connections', {})
+        live = {device.get('resource', device['id']): device for device in state['instruments']}
+        self.connected = {resource for resource, device in live.items() if not device['error'] and self.online}
+        saved = state.get('saved_devices', {})
+        resources = set(live) | set(state.get('configured_resources', []))
+        linked = {connection.get('instrument') for connection in connections.values()}
+        orphans = set(profiles) - linked - {device['id'] for device in live.values()}
+        resources |= orphans
+        def kind_for(key):
+            return 'Saved' if key in orphans and not key.startswith('demo:') else communication_type(key)
+        ids = sorted(resources, key=lambda key: (kind_for(key), key))
+        if ids != self.ids or self.row_kinds != {key: kind_for(key) for key in ids}:
+            for rows in self.sections.values():
+                while rows.get_first_child():
+                    rows.remove(rows.get_first_child())
+            self.labels, self.titles, self.device_actions, self.connect_buttons = {}, {}, {}, {}
+            for resource in ids:
+                kind = kind_for(resource)
+                details = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                if resource not in orphans:
+                    details.append(self.label(resource, 'dim-label'))
+                self.labels[resource] = self.label('', 'dim-label')
+                details.append(self.labels[resource])
+                actions = Gtk.Box(spacing=6)
+                toggle = self.icon_button('network-connect-symbolic', 'Connect', lambda resource=resource: self.connection_toggle(resource))
+                toggle.set_visible(resource not in orphans)
+                actions.append(toggle)
+                self.connect_buttons[resource] = toggle
+                actions.append(self.icon_button('emblem-system-symbolic', 'Device settings', lambda resource=resource: self.device_settings(resource)))
+                actions.append(self.icon_button('user-trash-symbolic', 'Forget…', lambda resource=resource: self.forget_device(resource)))
+                self.device_actions[resource] = actions
+                row = self.setting_row('', details, actions)
+                self.titles[resource] = row.get_first_child().get_first_child()
+                self.sections[kind].append(row)
+            for kind, rows in self.sections.items():
+                if rows.get_first_child() is None:
+                    rows.append(self.label(f'No {kind.lower()} instruments configured', 'dim-label'))
+            self.demo_section.get_parent().set_visible(any(kind_for(key) == 'Demo' for key in ids))
+            self.saved_section.get_parent().set_visible(any(kind_for(key) == 'Saved' for key in ids))
+            self.ids = ids
+            self.row_kinds = {key: kind_for(key) for key in ids}
+        for resource in ids:
+            device = live.get(resource)
+            key, profile = self.profile_for(resource)
+            name = (profile.get('name') or profile['identity']) if profile else (device or saved.get(resource, {})).get('name', 'Saved instrument')
+            self.titles[resource].set_text(name)
+            button = self.connect_buttons[resource]
+            connected = resource in self.connected
+            title = 'Disconnect' if connected else 'Connect'
+            button.set_icon_name('network-disconnect-symbolic' if connected else 'network-connect-symbolic')
+            button.set_tooltip_text(title)
+            button.update_property([Gtk.AccessibleProperty.LABEL], [title])
+            if not self.online:
+                text = 'Service offline'
+            elif resource in orphans:
+                text = f"Saved profile · {profile['type']} · Serial: {profile.get('serial') or 'Unavailable'}"
+            elif not device:
+                text = 'Disconnected · Not currently available'
+            elif device['error']:
+                text = 'Disconnected · ' + device['error']
+            else:
+                text = f"{'Demo' if device['simulated'] else 'Connected'} · {device['category'].replace('_', ' ')}"
+            self.labels[resource].set_text(text)
+
+    def refresh(self):
+        if self.closed:
+            return False
+        if not self.service_check_pending:
+            self.service_check_pending = True
+            def checked(ok, output, error):
+                self.service_check_pending = False
+                if self.closed:
+                    return
+                self.service_state = output if ok else 'unavailable'
+                self.service_status.set_text(f'{self.service_state.title()} · ' + ('Agent service available' if self.online else 'Agent service offline'))
+                self.update_sensitivity()
+            self.run_systemctl(['show', 'gate.service', '--property=ActiveState', '--value'], checked)
+        if self.pending:
+            return True
+        self.pending = True
+        def updated(state, error):
+            self.pending = False
+            if self.closed:
+                return
+            self.online = error is None
+            if error:
+                self.status.set_text('Offline · Start the background service to manage devices')
+                self.api.set_text('Offline')
+                self.render_devices(self.view_state or dict(instruments=[]))
+            else:
+                self.status.set_text(state['status'] + (' · Recording active' if state['recording'] else ''))
+                if not self.interval_dirty:
+                    self.syncing = True
+                    self.interval.set_value(state.get('interval_s', 1))
+                    self.syncing = False
+                control = state.get('control_api')
+                self.api.set_text(f"{control['url']}\nPrivate local token · Advanced commands {'enabled' if control['allow_raw'] else 'disabled'}" if control else 'Disabled')
+                for request in list(self.requests):
+                    result = state.get('commands', {}).get(request, {})
+                    if result.get('state') in ('succeeded', 'failed'):
+                        self.requests.discard(request)
+                        self.notify(result.get('error', 'Changes applied.'))
+                self.render_devices(state)
+            self.update_sensitivity()
+        self.bus_call('Snapshot', None, updated)
         return True
 
+
 def launch():
-    app=Gtk.Application(application_id=BUS+'.App')
-    app.connect('activate',lambda app:Window(app).present())
+    app = Gtk.Application(application_id=BUS+'.App')
+    app.connect('activate', lambda app: Window(app).present())
     app.run(None)

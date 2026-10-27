@@ -65,7 +65,7 @@ Record the original function/settings/output state before making changes. Stay w
 
 ### Current bench
 
-Discover IDs again after a reconnect; do not hard-code node numbers.
+Use the returned `id` for instrument commands and `resource` for connection commands. Identified hardware has a stable `instrument:…` ID derived from driver type/model and serial number; the resource may change across ports or transport methods. Endpoint aliases still resolve to their identified instrument. Drivers without usable serial numbers retain connection-local IDs.
 
 | Instrument | Verified transport | Notes |
 |---|---|---|
@@ -84,13 +84,32 @@ api.command('connect', resource='serial:///dev/ttyUSB0?baud=9600')
 api.command('connect', resource='tcp://192.168.1.100:5025')
 ```
 
-USB serial adapters identify the adapter, not the meter behind it, so add serial devices by explicit address. Serial/TCP connections and the acquisition interval are saved in `$XDG_CONFIG_HOME/gate/devices.json` (normally `~/.config/gate/devices.json`) and reconnected at service startup. USBTMC devices are rescanned.
+USB serial adapters identify the adapter, not the meter behind it, so add serial devices by explicit address. Schema version 2 in `$XDG_CONFIG_HOME/gate/devices.json` separates `connections` (resource, linked instrument, enabled flag) from `instrument_profiles` (type, hardware serial, friendly name, settings and supported functions). Legacy address-based profiles migrate automatically. `/v1/state` includes both collections, including disconnected instruments. TMC paths can change after replugging; Scan or add/edit the new path. After identification, an existing model/type + serial reuses its profile. For hardware without a usable serial, profiles stay connection-local rather than merging unrelated devices.
 
 ```python
-api.command('disconnect', instrument=device_id)  # disconnect and forget saved endpoint
-api.command('disconnect', instrument=device_id, forget=False)  # disconnect for this run
-api.command('settings', interval=1.0)  # 0.1–60 seconds; stop recording first
+state = api.request('/v1/state')
+device = state['instruments'][0]
+device_id, resource = device['id'], device['resource']
+api.command('disconnect', instrument=device_id, forget=False)  # retain connection and instrument settings
+api.command('connect', resource=resource)  # reuses settings after identification
+api.command('connect', resource=resource, reconnect=True)  # force reopen even if connected
+api.command('edit_device', instrument=resource,
+            resource='serial:///dev/ttyUSB0?baud=4800')  # edit just this connection
+api.command('instrument_settings', instrument=device_id, name='Bench reference',
+            settings={'function': 'FREQ'})  # choose a function valid for the driver
+api.command('display_measurements', instrument=device_id, functions=['FREQ'])  # checked top-bar readings
+api.command('display_measurements', instrument=device_id, functions=[])  # hide every reading; no hardware switch
+api.command('copy_settings', instrument=target_id, source=source_id)  # exact same type/model only
+api.command('forget', instrument=device_id, resource=resource, scope='connection')
+api.command('forget', instrument=device_id, scope='instrument')
+api.command('settings', interval=1.0)  # service-wide polling interval; stop recording first
 ```
+
+`instrument_settings.settings` supports `function` and `display_functions`, using function IDs from the instrument catalog. `display_functions` is a list of zero or more checked top-bar measurements; an explicit empty list keeps all readings hidden. Prefer `display_measurements` for updating that list: it validates coexistence, confirms any required mode change, and saves only on success. Functions with the same non-null `exclusive_group` cannot be displayed together. Configurable functions without a group are treated as the primary exclusive group for compatibility; passive scope measurements can coexist. Unchecking/hiding leaves the current hardware function and logging unchanged. Choices persist across restarts and connection methods, and can be changed for a saved offline instrument. Existing profiles without this field initially show one reading per instrument. Omitting `settings` preserves existing settings; `{}` clears the stored preferences and returns to the initial display choice. Names can be blank (use model identity) or up to 80 printable characters. Copying copies measurement and top-bar display preferences only, never names, serials or connections. Source and target must have the same exact driver type/model. Saved functions apply immediately if connected and are restored on subsequent connections, including a different transport; output enable state, arbitrary raw commands and sweeps are never saved/replayed. Only explicit function selections are saved; passive front-panel reads do not overwrite preferences.
+
+Connecting the same physical instrument through another method replaces its active transport, keeping its stable ID and shared logging series; GATE does not poll the same instrument twice. Previously used addresses remain saved but inactive. Deliberately disconnected instruments stay disconnected across service restarts. An inactive address can be removed without disrupting another active method. Removing the last connection keeps a saved instrument profile available for renaming/copying; forgetting the whole instrument deletes its profile and all addresses. Recordings are retained. The legacy `disconnect` default still removes just the selected connection; specify `forget=False` for a plain disconnect, and use `forget` with an explicit scope for removal.
+
+A failed add or connection edit keeps the new endpoint for correction/retry and returns a failed command result. Invalid or duplicate connection edits leave the existing transport intact. If a different physical instrument is discovered at a reused address, it receives its own profile and never inherits settings from the previous serial number.
 
 The interval is a requested host polling interval, not a guarantee of sample rate or simultaneous acquisition. Inspect actual timestamps. Hardware may take longer, especially immediately after a function change. An unresponsive device is removed from acquisition; reconnect explicitly after correcting access, cable or settings problems.
 

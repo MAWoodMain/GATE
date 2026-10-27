@@ -35,6 +35,7 @@ def parse_value(text, function):
     return value, 'ok'
 
 class Fluke45:
+    device_type = 'FLUKE:45'
     category = 'multimeter'
     simulated = False
 
@@ -52,7 +53,7 @@ class Fluke45:
 
     def functions(self):
         # Primary display only. Secondary display readings remain passive.
-        return [MeasurementFunction(code, FUNCTION_LABELS[code], f'primary.{code}', unit, True)
+        return [MeasurementFunction(code, FUNCTION_LABELS[code], f'primary.{code}', unit, True, 'primary')
                 for code, unit in FUNCTIONS.items()]
 
     def select_function(self, function):
