@@ -1,6 +1,6 @@
 import math
 import time
-from gate.model import Reading
+from gate.model import Reading, MeasurementFunction
 
 class Simulated:
     simulated = True
@@ -10,6 +10,15 @@ class Simulated:
         self.name = "SIMULATED · " + category.replace("_", " ").title()
         self.voltage = 0.0
         self.enabled = False
+    def functions(self):
+        channels = {
+            'multimeter': [('voltage_dc', 'DC voltage', 'V')],
+            'power_supply': [('set_voltage', 'Voltage setpoint', 'V'), ('output_enabled', 'Output enabled', ''),
+                             ('voltage', 'Voltage', 'V'), ('current', 'Current', 'A')],
+            'oscilloscope': [('C1.PKPK', 'C1 · Peak-to-peak', 'V'), ('C1.FREQ', 'C1 · Frequency', 'Hz')],
+        }
+        return [MeasurementFunction(channel, label, channel, unit) for channel, label, unit in channels[self.category]]
+
     def read(self):
         wobble = math.sin(time.monotonic()) * 0.003
         if self.category == "power_supply":

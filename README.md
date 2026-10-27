@@ -53,7 +53,7 @@ The installer copies the extension to your user extension directory. Log out and
 gnome-extensions enable gate@mawoodmain.github.io
 ```
 
-The top bar displays a live measurement and recording dot. Click **GATE** and expand a device dropdown under **Display measurement** to select a channel. Real instruments appear before demos; each instrument has its own dropdown with readable channel names and live values. Updates preserve open dropdowns and keyboard focus, including when a value becomes unavailable. Selecting a Fluke function switches its primary measurement mode and pins that reading only after hardware confirmation. All ten primary functions are listed even when inactive; secondary-display controls are omitted. Selection lasts for the extension session. A dot marks the selected channel, and **Open GATE** opens the app. When the service stops, the indicator says offline; old samples are marked stale after five seconds. The service continues logging when you close the window.
+The top bar can show any number of concurrent measurements from each instrument, or none. Click **GATE**, expand an instrument under **Measurements in top bar**, and toggle the readings you want. Toggles stay open while you make several choices; live updates preserve the menu and keyboard focus. Scope channels can be shown together, as can readings from different instruments. Mutually exclusive functions (the Fluke 45 primary display) replace one another and switch hardware only when checked, after confirmation. Unchecking a reading hides it without changing the instrument function or stopping logging. The Fluke secondary display remains outside the function picker. With everything unchecked, only **GATE** and the recording dot remain. Choices are saved with the instrument profile, including an explicit empty selection, and follow it across connection methods and service/extension restarts. Missing instruments remain in the picker so their offline readings can also be hidden. Existing profiles without display preferences initially show one available reading per instrument. **Open GATE** opens device management. When the service stops the indicator says offline; stale values are marked after five seconds.
 
 ### Connect the SDS1202X-E over USB
 
@@ -125,7 +125,7 @@ dbus-run-session -- xvfb-run -a python3 tests/desktop_smoke.py
 
 See [Fluke 45 setup and verification](docs/fluke45.md), [architecture and driver development](docs/architecture.md), and [roadmap](docs/roadmap.md).
 
-The GNOME menu regression can be run on GNOME 50 with `gnome-shell-test-tool --headless --disable-animations --extension PACKAGE.zip tests/extension_smoke.js` under a private `dbus-run-session`; build the extension package using `gnome-extensions pack extension`. It checks actual Shell menu actors, open state, keyboard focus, unavailable readings, recovery, and disconnects.
+The GNOME menu regression can be run on GNOME 50 with `gnome-shell-test-tool --headless --disable-animations --extension PACKAGE.zip tests/extension_smoke.js` under a private `dbus-run-session`; build the extension package using `gnome-extensions pack extension`. It checks actual Shell toggles, multiple/zero readings across instruments, open state, keyboard focus, unavailable readings, recovery, disconnected-device hiding, exclusive function switching, failure rollback and stable identity across transport changes.
 
 ## Protocol references
 

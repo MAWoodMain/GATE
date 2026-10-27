@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from gate import __version__
 
-ACTIONS = {'scan', 'connect', 'edit_device', 'instrument_settings', 'copy_settings', 'forget', 'disconnect', 'settings', 'demo', 'record', 'stop_recording', 'select_function',
+ACTIONS = {'scan', 'connect', 'edit_device', 'instrument_settings', 'display_measurements', 'copy_settings', 'forget', 'disconnect', 'settings', 'demo', 'record', 'stop_recording', 'select_function',
            'static', 'sweep', 'output', 'cancel_sweep', 'query', 'write'}
 
 def runtime_directory():

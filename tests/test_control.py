@@ -131,6 +131,15 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
         self.assertNotIn(keys[0], self.request('/v1/state')[1]['instrument_profiles'])
 
+    def test_top_bar_measurements_can_be_selected_and_cleared_through_http(self):
+        for functions in (['voltage', 'current', 'set_voltage'], []):
+            status, accepted = self.request('/v1/commands', dict(action='display_measurements', instrument='demo:power_supply', functions=functions))
+            self.assertEqual(status, 202)
+            self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+            state = self.request('/v1/state')[1]
+            self.assertEqual(state['instrument_profiles']['demo:power_supply']['settings']['display_functions'], functions)
+            self.assertFalse(self.engine.instruments['demo:power_supply'].enabled)
+
     def test_manifest_is_removed_when_server_stops(self):
         path=self.control.path
         self.control.close()

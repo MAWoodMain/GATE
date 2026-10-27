@@ -81,7 +81,7 @@ try:
             window.online = True
             # Known physical identities share settings while addresses remain per-connection.
             profile = dict(type='FLUKE:45', manufacturer='FLUKE', model='45', serial='A', identity='FLUKE,45,A,1.7', name='Reference',
-                           settings={'function':'FREQ'}, functions=[dict(id='FREQ', label='Frequency', channel='primary.FREQ', unit='Hz', configurable=True)])
+                           settings={'function':'FREQ', 'display_functions':['FREQ']}, functions=[dict(id='FREQ', label='Frequency', channel='primary.FREQ', unit='Hz', configurable=True)])
             fixture['instrument_profiles'] = {'instrument:A': profile, 'instrument:B':dict(profile, serial='B', name='Donor')}
             address = 'serial:///dev/ttyUSB9?baud=9600'
             fixture['connections'] = {address:dict(instrument='instrument:A', enabled=True)}
@@ -121,7 +121,7 @@ try:
             name.set_text('Bench reference')
             window.command.reset_mock()
             next(child for child in children if isinstance(child, Gtk.Button) and child.get_label() == 'Save Instrument Settings').emit('clicked')
-            window.command.assert_called_once_with('instrument_settings', instrument='instrument:A', name='Bench reference', settings={'function':'FREQ'})
+            window.command.assert_called_once_with('instrument_settings', instrument='instrument:A', name='Bench reference', settings={'function':'FREQ', 'display_functions':['FREQ']})
             copy_dialog = window.device_settings(address)
             dialogs.append(copy_dialog)
             page = copy_dialog.get_content_area().get_first_child().get_nth_page(1)

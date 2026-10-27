@@ -371,7 +371,19 @@ class Window(Gtk.ApplicationWindow):
             instrument_page.append(self.label('Names and saved functions follow this instrument across all connections. Saved functions are reapplied when it connects.', 'dim-label'))
             def save_instrument():
                 index = function.get_selected()
-                settings = dict(function=functions[index-1]['id']) if index else {}
+                settings = dict(profile.get('settings', {}))
+                settings.pop('function', None)
+                if index:
+                    chosen = functions[index-1]
+                    settings['function'] = chosen['id']
+                    group = chosen.get('exclusive_group') or ('primary' if chosen.get('configurable') else None)
+                    catalog = {item['id']:item for item in functions}
+                    def same_group(identity):
+                        item = catalog.get(identity, {})
+                        return group and (item.get('exclusive_group') or ('primary' if item.get('configurable') else None)) == group
+                    shown = settings.get('display_functions')
+                    if shown is not None and any(same_group(identity) for identity in shown):
+                        settings['display_functions'] = [identity for identity in shown if not same_group(identity)] + [chosen['id']]
                 self.command('instrument_settings', instrument=key, name=name.get_text(), settings=settings)
                 dialog.destroy()
             instrument_page.append(self.button('Save Instrument Settings', save_instrument))

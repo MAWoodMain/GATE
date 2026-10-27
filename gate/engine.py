@@ -146,27 +146,48 @@ class Engine:
                     instrument_profiles=self.instrument_profiles, interval=self.interval), stream)
             os.replace(temporary, self.profile_path)
 
+    def function_group(self, function):
+        return function.exclusive_group or ('primary' if function.configurable else None)
+
     def validate_settings(self, key, settings):
-        if not isinstance(settings, dict) or set(settings) - {'function'}:
-            raise ValueError('Supported instrument setting: function')
-        if 'function' not in settings:
-            return
-        function = settings['function']
+        if not isinstance(settings, dict) or set(settings) - {'function', 'display_functions'}:
+            raise ValueError('Supported instrument settings: function, display_functions')
         instrument = self.instruments.get(key)
-        if instrument:
-            functions = self.functions(instrument)
-        else:
-            profile = self.instrument_profiles[key]
-            functions = profile.get('functions', [])
-            functions = [MeasurementFunction(**item) for item in functions]
-        if not any(item.id == function for item in functions):
+        functions = self.functions(instrument) if instrument else [
+            MeasurementFunction(**item) for item in self.instrument_profiles[key].get('functions', [])]
+        catalog = {item.id: item for item in functions}
+        if 'function' in settings and (not isinstance(settings['function'], str) or settings['function'] not in catalog):
             raise ValueError('Unsupported measurement function for this instrument')
+        if 'display_functions' in settings:
+            selected = settings['display_functions']
+            if not isinstance(selected, list) or any(not isinstance(item, str) or item not in catalog for item in selected):
+                raise ValueError('display_functions must list supported measurement function IDs')
+            if len(set(selected)) != len(selected):
+                raise ValueError('Duplicate measurement function')
+            groups = [self.function_group(catalog[item]) for item in selected if self.function_group(catalog[item])]
+            if len(set(groups)) != len(groups):
+                raise ValueError('Choose only one measurement per exclusive function group')
+            if 'function' in settings:
+                function = catalog[settings['function']]
+                group = self.function_group(function)
+                if group and any(self.function_group(catalog[item]) == group and item != function.id for item in selected):
+                    raise ValueError('Saved function must match the displayed function in its exclusive group')
 
     def apply_settings(self, instrument, settings):
+        catalog = {item.id: item for item in self.functions(instrument)}
+        chosen = []
         if 'function' in settings:
-            function = next((item for item in self.functions(instrument) if item.id == settings['function']), None)
-            if function is None:
+            if settings['function'] not in catalog:
                 raise ValueError('Saved measurement function is unsupported by this driver')
+            chosen.append(catalog[settings['function']])
+        for identity in settings.get('display_functions', []):
+            if identity not in catalog:
+                raise ValueError('Saved display function is unsupported by this driver')
+            function = catalog[identity]
+            if function.configurable:
+                chosen = [item for item in chosen if self.function_group(item) != self.function_group(function)]
+                chosen.append(function)
+        for function in chosen:
             if function.configurable:
                 instrument.select_function(function.id)
 
@@ -239,7 +260,7 @@ class Engine:
                 if key not in self.instruments:
                     self.instruments[key] = Simulated(category)
                     self.instrument_profiles.setdefault(key, dict(type=key, manufacturer='GATE', model=category,
-                        serial='demo', identity=self.instruments[key].name, name='', settings={}, functions=[],
+                        serial='demo', identity=self.instruments[key].name, name='', settings={}, functions=[asdict(item) for item in self.instruments[key].functions()],
                         category=category, auto_connect=False))
             self.save_profile()
             self.state["demo"] = True
@@ -323,6 +344,34 @@ class Engine:
             self.instrument_profiles.pop(key)
             self.save_profile()
             self._status('Instrument and its settings forgotten')
+        elif action == 'display_measurements':
+            key = self.resolve(args['instrument'])
+            profile = self.instrument_profiles[key]
+            settings = copy.deepcopy(profile['settings'])
+            settings['display_functions'] = copy.deepcopy(args['functions'])
+            instrument = self.instruments.get(key)
+            catalog = {item['id']: MeasurementFunction(**item) for item in profile.get('functions', [])}
+            if instrument:
+                catalog = {item.id: item for item in self.functions(instrument)}
+            if isinstance(settings['display_functions'], list):
+                for identity in settings['display_functions']:
+                    if isinstance(identity, str) and identity in catalog and catalog[identity].configurable:
+                        settings['function'] = identity
+            self.validate_settings(key, settings)
+            # Hiding never changes hardware configuration. Only newly checked
+            # configurable functions switch a device, and must confirm before saving.
+            for identity in settings['display_functions']:
+                function = catalog[identity]
+                if function.configurable:
+                    if instrument and identity not in profile['settings'].get('display_functions', []) and getattr(instrument, 'current_function', None) != identity:
+                        instrument.select_function(identity)
+                    settings['function'] = identity
+            profile['settings'] = settings
+            self.save_profile()
+            if self.recorder:
+                self.recorder.event(time.monotonic_ns()-self.origin, key, f'display_measurements: {settings["display_functions"]}')
+            self._status('Top-bar measurements saved')
+            return dict(instrument=key, functions=settings['display_functions'])
         elif action in ('instrument_settings', 'copy_settings'):
             key = self.resolve(args['instrument'])
             profile = self.instrument_profiles[key]
@@ -369,6 +418,12 @@ class Engine:
                 profile = self.instrument_profiles.get(instrument.id)
                 if profile is not None:
                     profile['settings']['function'] = function.id
+                    displayed = profile['settings'].get('display_functions')
+                    group = self.function_group(function)
+                    if displayed is not None and group and any(
+                            self.function_group(functions[item]) == group for item in displayed if item in functions):
+                        profile['settings']['display_functions'] = [item for item in displayed
+                            if item in functions and self.function_group(functions[item]) != group] + [function.id]
                     self.save_profile()
                 if self.recorder:
                     self.recorder.event(time.monotonic_ns()-self.origin, instrument.id,

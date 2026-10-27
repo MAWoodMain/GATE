@@ -24,3 +24,4 @@ class MeasurementFunction:
     channel: str
     unit: str
     configurable: bool = False
+    exclusive_group: str | None = None
