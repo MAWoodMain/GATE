@@ -35,6 +35,7 @@ def parse_value(text, function):
     return value, 'ok'
 
 class Fluke45:
+    device_type = 'FLUKE:45'
     category = 'multimeter'
     simulated = False
 

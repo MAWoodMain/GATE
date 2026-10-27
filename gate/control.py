@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from gate import __version__
 
-ACTIONS = {'scan', 'connect', 'edit_device', 'disconnect', 'settings', 'demo', 'record', 'stop_recording', 'select_function',
+ACTIONS = {'scan', 'connect', 'edit_device', 'instrument_settings', 'copy_settings', 'forget', 'disconnect', 'settings', 'demo', 'record', 'stop_recording', 'select_function',
            'static', 'sweep', 'output', 'cancel_sweep', 'query', 'write'}
 
 def runtime_directory():
@@ -66,7 +66,8 @@ class ControlServer:
                     self.reply(200, {'instruments': state['instruments'], 'updated_utc_ns': state.get('updated_utc_ns')})
                 elif len(parts) == 3 and parts[:2] == ['v1', 'instruments']:
                     identity = unquote(parts[2])
-                    device = next((d for d in state['instruments'] if d['id'] == identity), None)
+                    key = state.get('connections', {}).get(identity, {}).get('instrument') or identity
+                    device = next((d for d in state['instruments'] if d['id'] == key), None)
                     self.reply(200 if device else 404, device or {'error': 'Instrument not found'})
                 elif len(parts) == 3 and parts[:2] == ['v1', 'commands']:
                     result = state.get('commands', {}).get(parts[2])

@@ -10,6 +10,7 @@ const BUS = 'io.github.MAWoodMain.GATE';
 const PATH = '/io/github/MAWoodMain/GATE';
 
 function deviceName(instrument) {
+    if (instrument.custom_name) return instrument.custom_name;
     if (instrument.simulated) {
         const category = {multimeter: 'Multimeter', power_supply: 'Power supply',
             oscilloscope: 'Oscilloscope'}[instrument.category] ?? instrument.category;

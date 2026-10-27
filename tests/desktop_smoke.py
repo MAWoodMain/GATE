@@ -79,10 +79,74 @@ try:
             assert not window.service_buttons['stop'].get_sensitive()
             window.command, window.run_systemctl, window.refresh = original_command, original_systemctl, original_refresh
             window.online = True
+            # Known physical identities share settings while addresses remain per-connection.
+            profile = dict(type='FLUKE:45', manufacturer='FLUKE', model='45', serial='A', identity='FLUKE,45,A,1.7', name='Reference',
+                           settings={'function':'FREQ'}, functions=[dict(id='FREQ', label='Frequency', channel='primary.FREQ', unit='Hz', configurable=True)])
+            fixture['instrument_profiles'] = {'instrument:A': profile, 'instrument:B':dict(profile, serial='B', name='Donor')}
+            address = 'serial:///dev/ttyUSB9?baud=9600'
+            fixture['connections'] = {address:dict(instrument='instrument:A', enabled=True)}
+            fixture['instruments'] = [dict(id='instrument:A', resource=address, name='Reference', category='multimeter', simulated=False, error='')]
+            window.render_devices(fixture)
+            assert window.titles[address].get_text() == 'Reference'
+            buttons = window.device_actions[address]
+            toggle = buttons.get_first_child()
+            settings_button = toggle.get_next_sibling()
+            trash = settings_button.get_next_sibling()
+            assert toggle.get_icon_name() == 'network-disconnect-symbolic'
+            assert settings_button.get_icon_name() == 'emblem-system-symbolic'
+            assert trash.get_icon_name() == 'user-trash-symbolic'
+            assert trash.get_next_sibling() is None
+            window.command = Mock()
+            toggle.emit('clicked')
+            window.command.assert_called_once_with('disconnect', instrument=address, forget=False)
+            fixture['instruments'] = []
+            window.render_devices(fixture)
+            assert toggle.get_icon_name() == 'network-connect-symbolic'
+            window.command.reset_mock()
+            toggle.emit('clicked')
+            window.command.assert_called_once_with('connect', resource=address)
+            settings = window.device_settings(address)
+            dialogs.append(settings)
+            tabs = settings.get_content_area().get_first_child()
+            assert tabs.get_n_pages() == 2
+            assert tabs.get_tab_label_text(tabs.get_nth_page(0)) == 'Connection'
+            assert tabs.get_tab_label_text(tabs.get_nth_page(1)) == 'Instrument'
+            page = tabs.get_nth_page(1)
+            children = []
+            child = page.get_first_child()
+            while child:
+                children.append(child)
+                child = child.get_next_sibling()
+            name = next(child for child in children if isinstance(child, Gtk.Entry))
+            name.set_text('Bench reference')
+            window.command.reset_mock()
+            next(child for child in children if isinstance(child, Gtk.Button) and child.get_label() == 'Save Instrument Settings').emit('clicked')
+            window.command.assert_called_once_with('instrument_settings', instrument='instrument:A', name='Bench reference', settings={'function':'FREQ'})
+            copy_dialog = window.device_settings(address)
+            dialogs.append(copy_dialog)
+            page = copy_dialog.get_content_area().get_first_child().get_nth_page(1)
+            child = page.get_first_child()
+            while child and not (isinstance(child, Gtk.Button) and child.get_label() == 'Copy Instrument Settings'):
+                child = child.get_next_sibling()
+            assert child is not None, 'Compatible instruments must offer copy settings'
+            window.command.reset_mock()
+            child.emit('clicked')
+            window.command.assert_called_once_with('copy_settings', instrument='instrument:A', source='instrument:B')
+            for response, scope in ((1, 'connection'), (2, 'instrument')):
+                forget = window.forget_device(address)
+                dialogs.append(forget)
+                assert forget.get_widget_for_response(1).get_label() == 'Remove Connection'
+                assert forget.get_widget_for_response(2).get_label() == 'Forget Instrument'
+                window.command.reset_mock()
+                forget.response(response)
+                expected = dict(instrument='instrument:A', scope=scope)
+                if scope == 'connection': expected['resource'] = address
+                window.command.assert_called_once_with('forget', **expected)
+            window.command = original_command
             window.render_devices(fixture)
             window.update_sensitivity()
             window.notify('')
-            print('PASS: D-Bus recording, grouped/missing devices, persistent editor, service actions and errors')
+            print('PASS: D-Bus recording, device icons/toggle, settings tabs/copy, scoped forget, service controls')
         except Exception as exc:
             errors.append(exc)
         finally:

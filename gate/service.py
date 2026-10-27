@@ -50,9 +50,9 @@ def serve(demo=False, interval=None, control_port=8765, allow_raw=False, ephemer
         control.start()
         with engine.lock:
             engine.state["control_api"] = dict(url=control.manifest["url"], manifest=str(control.path), allow_raw=allow_raw)
-    engine.submit("demo" if demo else "scan")
+    engine.submit("demo" if demo else "scan", automatic=True)
     for resource in sorted(engine.saved_resources):
-        engine.submit("connect", resource=resource)
+        engine.submit("connect", resource=resource, automatic=True)
     engine.start()
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda: (loop.quit(), False)[1])
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, lambda: (loop.quit(), False)[1])

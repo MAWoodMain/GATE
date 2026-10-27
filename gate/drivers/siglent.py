@@ -22,6 +22,7 @@ def parse_measurement(response, parameter, unit):
     raise ValueError(f"Unexpected {parameter} response: {response[:160]}")
 
 class SiglentSDS:
+    device_type = 'SIGLENT:SDS1202X-E'
     category = "oscilloscope"
     simulated = False
     @staticmethod
