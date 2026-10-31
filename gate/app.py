@@ -96,11 +96,12 @@ class Window(Gtk.ApplicationWindow):
         self.section_controls = []
         for kind, subtitle in (
                 ('TMC', 'USB instruments using the Test & Measurement Class'),
+                ('USB', 'Hantek 365 USB meters'),
                 ('Serial', 'Serial instruments and USB serial adapters'),
                 ('Network', 'Instruments with a raw SCPI TCP connection')):
             section, rows = self.section(kind, subtitle, outer)
             controls = Gtk.Box(spacing=6)
-            if kind == 'TMC':
+            if kind in ('TMC', 'USB'):
                 scan = self.button('Scan', lambda: self.command('scan'))
                 controls.append(scan)
                 self.section_controls.append(scan)
@@ -387,8 +388,8 @@ class Window(Gtk.ApplicationWindow):
             fields['port'] = entry('TCP port', str(url.port or 5025), '5025')
             content.append(self.label('Raw SCPI TCP connections. Automatic LAN discovery is not available.', 'dim-label'))
         else:
-            fields['path'] = entry('TMC device path', identity or '', '/dev/usbtmc0')
-            content.append(self.label('Use Scan in the TMC section to find accessible USB instruments.', 'dim-label'))
+            fields['path'] = entry('USB address' if kind == 'USB' else 'TMC device path', identity or '', 'hantek://usb/3-1' if kind == 'USB' else '/dev/usbtmc0')
+            content.append(self.label('Use Scan to find accessible USB instruments. Hantek addresses follow the USB port when reconnected.', 'dim-label'))
         def read():
             if kind == 'Serial':
                 resource = f"serial://{fields['path'].get_text().strip()}?baud={rates[baud.get_selected()]}"

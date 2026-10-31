@@ -69,12 +69,15 @@ try:
             assert all('Connected' in label.get_text() or 'Demo' in label.get_text() for label in window.labels.values())
             assert not hasattr(window, 'voltage'), 'Measurement/output controls belong outside device manager'
             # Exercise missing-device sections, structured editor and service actions without touching hardware.
-            fixture = dict(instruments=[], configured_resources=['/dev/usbtmc9', 'serial:///dev/ttyUSB9?baud=9600', 'tcp://missing:5025'],
+            fixture = dict(instruments=[], configured_resources=['/dev/usbtmc9', 'hantek://usb/3-1', 'serial:///dev/ttyUSB9?baud=9600', 'tcp://missing:5025'],
                            saved_devices={'/dev/usbtmc9': {'name': 'Remembered scope'}})
             window.render_devices(fixture)
             assert window.titles['/dev/usbtmc9'].get_text() == 'Remembered scope'
             assert all('Disconnected' in label.get_text() for label in window.labels.values())
-            assert all(window.sections[kind].get_first_child() for kind in ('TMC', 'Serial', 'Network'))
+            assert all(window.sections[kind].get_first_child() for kind in ('TMC', 'USB', 'Serial', 'Network'))
+            usb_fields = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            read_usb = window.connection_fields('USB', 'hantek://usb/3-1', usb_fields)
+            assert read_usb() == 'hantek://usb/3-1'
             dialog = window.edit_connection('Serial', 'serial:///dev/ttyUSB9?baud=9600')
             dialogs.append(dialog)
             entry = dialog.get_content_area().get_first_child().get_next_sibling()

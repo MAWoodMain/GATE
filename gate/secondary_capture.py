@@ -133,6 +133,7 @@ class Captures:
         spec = self.plan.specs[key]
         record = dict(id=str(len(self.records)), measurement=key, label=spec['label'], role=spec['role'],
             instrument=self.run.bindings.get(spec['role']), channel=spec['channel'], unit=spec['unit'], phase=spec['phase'],
+            screenshot_requested=spec.get('screenshot', spec['phase'] == 'transition'),
             point_index=len(self.run.points), setpoint_index=self.run.step_index, setpoints=copy.deepcopy(self.run.steps[self.run.step_index]),
             quality=quality, error=error, captured_utc_ns=time.time_ns())
         record.update(data or {})

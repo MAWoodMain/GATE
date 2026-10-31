@@ -4,9 +4,11 @@ from gate.drivers.siglent import SiglentSDS
 from gate.drivers.fluke45 import Fluke45
 from gate.serial import FlukeSerial
 from gate.transport import SCPI
+from gate.hantek_usb import HantekUSB, resources as hantek_resources
+from gate.drivers.hantek365 import Hantek365
 
 def driver_types():
-    drivers = [SiglentSDS, Fluke45]
+    drivers = [SiglentSDS, Fluke45, Hantek365]
     for entry in entry_points(group="gate.drivers"):
         cls = entry.load()
         if cls not in drivers:
@@ -14,7 +16,7 @@ def driver_types():
     return drivers
 
 def usb_resources():
-    return sorted(str(p) for p in Path("/dev").glob("usbtmc[0-9]*"))
+    return sorted([str(p) for p in Path("/dev").glob("usbtmc[0-9]*")]+hantek_resources())
 
 def usb_inventory():
     result = []
@@ -24,9 +26,17 @@ def usb_inventory():
                 result.append("USB detected: " + product.read_text().strip())
         except OSError:
             pass
+    result += ['USB detected: Hantek 365 series · '+resource for resource in hantek_resources()]
     return result
 
 def connect(resource):
+    if resource.startswith('hantek://'):
+        transport = HantekUSB(resource)
+        try:
+            return Hantek365(transport)
+        except Exception:
+            transport.close()
+            raise
     transport = FlukeSerial(resource) if resource.startswith("serial://") else SCPI(resource)
     try:
         identity = transport.query("*IDN?")

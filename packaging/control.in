@@ -4,7 +4,7 @@ Section: electronics
 Priority: optional
 Architecture: all
 Maintainer: Matthew Wood <mawoodmain@googlemail.com>
-Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0, gir1.2-glib-2.0, systemd, udev
+Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0, gir1.2-glib-2.0, libusb-1.0-0, systemd, udev
 Recommends: gnome-shell (>= 46), gnome-shell (<< 51)
 Homepage: https://github.com/MAWoodMain/GATE
 Installed-Size: @SIZE@

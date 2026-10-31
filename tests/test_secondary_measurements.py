@@ -12,6 +12,23 @@ from gate.test_spec import validate_test
 
 
 class SecondaryTests(unittest.TestCase):
+    def test_temperature_defaults_are_celsius_in_templates_and_demo(self):
+        import json
+        from gate.model import DEFAULT_TEMPERATURE_UNIT
+        from gate.secondary import add_observations
+        from gate.procedures import load_template
+        self.assertEqual(DEFAULT_TEMPERATURE_UNIT, '°C')
+        for path in (Path(__file__).parents[1]/'gate/templates').glob('*-with-observations.json'):
+            spec = json.loads(path.read_text())
+            self.assertTrue(all(metric['unit'] == DEFAULT_TEMPERATURE_UNIT for metric in spec['secondary_measurements'].values()))
+            self.assertEqual(spec['derived']['temperature_rise_c']['unit'], DEFAULT_TEMPERATURE_UNIT)
+        spec = load_template('capture')
+        add_observations(spec, thermal_role='thermal', scope_role=None, ripple=False)
+        self.assertTrue(all(metric['unit'] == DEFAULT_TEMPERATURE_UNIT for metric in spec['secondary_measurements'].values()))
+        probe = self.engine.instruments['demo:temperatures']
+        self.assertTrue(all(reading.unit == DEFAULT_TEMPERATURE_UNIT for reading in probe.read()))
+        self.assertTrue(all(function.unit == DEFAULT_TEMPERATURE_UNIT for function in probe.functions()))
+
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.engine = Engine(.1, experiment_directory=self.folder.name)

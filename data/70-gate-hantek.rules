@@ -1,0 +1,2 @@
+# Hantek 365 USB interface. VID/PID alone is shared with ST demo devices.
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="5722", ATTR{manufacturer}=="Hantek", ATTR{product}=="DMM USB", TAG+="uaccess"

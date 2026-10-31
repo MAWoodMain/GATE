@@ -1,6 +1,6 @@
 import math
 import time
-from gate.model import Reading, MeasurementFunction
+from gate.model import Reading, MeasurementFunction, DEFAULT_TEMPERATURE_UNIT
 
 class Simulated:
     simulated = True
@@ -110,13 +110,13 @@ class SimulatedThermometer:
     def __init__(self, bench):
         self.bench = bench
     def functions(self):
-        return [MeasurementFunction(key, label, key, '°C') for key, label in
+        return [MeasurementFunction(key, label, key, DEFAULT_TEMPERATURE_UNIT) for key, label in
                 [('dut_temperature', 'DUT temperature'), ('ambient_temperature', 'Ambient temperature')]]
     def read(self):
         voltage, current, input_current = self.bench.output()
         ambient = 22.5 + .03*math.sin(time.monotonic())
         loss = max(0., self.bench.supply.voltage*input_current-voltage*current)
-        return [Reading('ambient_temperature', ambient, '°C'), Reading('dut_temperature', ambient+3+7*loss, '°C')]
+        return [Reading('ambient_temperature', ambient, DEFAULT_TEMPERATURE_UNIT), Reading('dut_temperature', ambient+3+7*loss, DEFAULT_TEMPERATURE_UNIT)]
     def close(self):
         pass
 

@@ -6,6 +6,7 @@ import select
 import socket
 import threading
 import time
+from pathlib import Path
 
 class SCPI:
     def __init__(self, resource, timeout=1.0):
@@ -147,7 +148,31 @@ class SCPI:
                 raise ConnectionError('Instrument connection is closed')
             try:
                 if self.sock is None:
-                    raw = self._usb_query(command, raw=True, maximum=maximum+128)
+                    if framing == 'bmp' and command == 'SCDP':
+                        from gate.usb_screen import capture
+                        interface = (Path('/sys/class/usbmisc')/Path(self.resource).name/'device').resolve(strict=True)
+                        # Complete outstanding kernel-managed writes before its
+                        # fd is released (close otherwise cancels pending URBs).
+                        if self._usb_query('*OPC?').strip().split()[-1] != '1':
+                            raise ValueError('Scope did not finish preceding commands')
+                        os.close(self.fd)
+                        self.fd = None
+                        try:
+                            raw = capture(interface, self.timeout)
+                        finally:
+                            # udev recreates the USBTMC node after driver reattach.
+                            until = time.monotonic()+1.
+                            while self.fd is None:
+                                try:
+                                    node = next(interface.glob('usbmisc/usbtmc*'), None)
+                                    self.fd = os.open('/dev/'+node.name if node else self.resource, os.O_RDWR)
+                                    self._usb_timeout(self.timeout)
+                                except (FileNotFoundError, PermissionError):
+                                    if time.monotonic() >= until:
+                                        raise
+                                    time.sleep(.01)
+                    else:
+                        raw = self._usb_query(command, raw=True, maximum=maximum+128)
                     bounds = extent(raw)
                     if not bounds or len(raw) < bounds[1] or raw[bounds[1]:].strip(b'\r\n'):
                         raise ValueError('Truncated or malformed USB binary response')

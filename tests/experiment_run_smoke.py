@@ -122,6 +122,23 @@ with tempfile.TemporaryDirectory() as folder:
                     assert 'SIMULATED' in view.run_selection.get_text()
                     view.wiring.set_active(True)
                     assert view.start.get_sensitive()
+                    dialog = view.configure_waveforms()
+                    dialogs.append(dialog)
+                    controls = dialog.capture_controls['ripple']
+                    assert controls['channel'].get_active_id() == 'C1'
+                    assert not controls['screenshot'].get_active()
+                    controls['screenshot'].set_active(True)
+                    assert controls['timeout'].get_value() == 10.
+                    dialog.response(Gtk.ResponseType.ACCEPT)
+                    phase = 'capture_settings_saved'
+                elif phase == 'capture_settings_saved':
+                    if not view.current_spec()['waveforms']['ripple'].get('screenshot'):
+                        return True
+                    assert view.parameters['input_start_v'].get_value() == 8.
+                    assert view.parameters['samples_per_point'].get_value() == 2
+                    assert view.test_checks['maximum_output_current'].get_active()
+                    assert view.pickers['scope'].get_active_id() == 'demo:waveforms'
+                    view.wiring.set_active(True)
                     view.start.emit('clicked')
                     phase = 'efficiency'
                 elif phase == 'efficiency':

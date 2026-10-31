@@ -59,6 +59,9 @@ class ExperimentView(Gtk.Box):
         self.add_secondary_button = owner.button('Add Secondary Measurements…', self.add_secondary_measurements)
         self.add_secondary_button.set_halign(Gtk.Align.START)
         self.instrument_page.append(self.add_secondary_button)
+        self.capture_settings_button = owner.button('Waveform Channels & Screenshots…', self.configure_waveforms)
+        self.capture_settings_button.set_halign(Gtk.Align.START)
+        self.instrument_page.append(self.capture_settings_button)
         _, settings = owner.section('Test & Parameters', 'Choose a test and configure its operating parameters.', self.parameter_page)
         self.test_picker = Gtk.ComboBoxText(hexpand=True)
         for identity in definition['tests']:
@@ -409,6 +412,109 @@ class ExperimentView(Gtk.Box):
         self.device_signature = None
         self.owner.command('demo_experiment')
 
+    def configure_waveforms(self):
+        identity = self.test_picker.get_active_id()
+        spec = copy.deepcopy(self.current_spec())
+        dialog = Gtk.Dialog(title='Waveform Channels & Screenshots', transient_for=self.owner, modal=True,
+                            default_width=580, use_header_bar=True)
+        dialog.add_button('Cancel', Gtk.ResponseType.CANCEL)
+        save = dialog.add_button('Save', Gtk.ResponseType.ACCEPT)
+        save.add_css_class('suggested-action')
+        content = dialog.get_content_area()
+        content.set_spacing(16)
+        for setter in (content.set_margin_top, content.set_margin_bottom, content.set_margin_start, content.set_margin_end):
+            setter(20)
+        content.append(self.owner.label(spec['label'], 'device-title'))
+        content.append(self.owner.label('Settings apply to this test. Single shots save the stopped scope screen; ripple snapshots save the current live display.', 'dim-label'))
+        controls = {}
+        available = {item['id']:item for item in self.state.get('instruments', [])}
+        for key, wave in spec.get('waveforms', {}).items():
+            _, rows = self.owner.section(wave['label'], 'Single shot' if wave['phase'] == 'transition' else 'Settled snapshot', content)
+            device = available.get(self.pickers[wave['role']].get_active_id(), {})
+            channels = sorted(set(device.get('waveform_capabilities', {})) | {wave['channel']})
+            picker = Gtk.ComboBoxText()
+            for channel in channels:
+                picker.append(channel, channel)
+            picker.set_active_id(wave['channel'])
+            rows.append(self.owner.setting_row('Channel', picker))
+            screenshot = Gtk.CheckButton(label='Save scope screenshot', active=wave.get('screenshot', wave['phase'] == 'transition'))
+            rows.append(screenshot)
+            timeout = Gtk.SpinButton.new_with_range(.1, 30., .5)
+            timeout.set_digits(1)
+            # Expressions remain intact unless the user changes the displayed value.
+            configured_timeout = wave['timeout_s']
+            from gate.expressions import Expression
+            from gate.test_spec import expand_axes
+            values = dict(self.parameters_for_test(identity))
+            values.update(expand_axes(spec, values)[0])
+            initial_timeout = Expression(configured_timeout, values).evaluate(values)
+            timeout.set_value(initial_timeout)
+            rows.append(self.owner.setting_row('Capture timeout (seconds)', timeout))
+            screenshot.connect('toggled', lambda check, spin=timeout: spin.set_value(max(10., spin.get_value())) if check.get_active() else None)
+            native = Gtk.CheckButton(label='Use scope timebase and pre-trigger position', active=wave['window_s'] is None and wave['pretrigger'] is None)
+            native.set_sensitive(not native.get_active())
+            rows.append(native)
+            controls[key] = dict(channel=picker, screenshot=screenshot, timeout=timeout, native=native,
+                                 initial_timeout=initial_timeout)
+        error = self.owner.label('', 'error')
+        content.append(error)
+        busy = False
+        def respond(_, response):
+            nonlocal busy
+            if busy:
+                return
+            if response != Gtk.ResponseType.ACCEPT:
+                dialog.destroy()
+                return
+            try:
+                for key, widgets in controls.items():
+                    wave = spec['waveforms'][key]
+                    wave.update(channel=widgets['channel'].get_active_id(), screenshot=widgets['screenshot'].get_active())
+                    if widgets['timeout'].get_value() != widgets['initial_timeout']:
+                        wave['timeout_s'] = widgets['timeout'].get_value()
+                    if widgets['native'].get_active():
+                        wave.update(window_s=None, pretrigger=None)
+                spec_validated, _ = validate_test(spec, self.definition['roles'])
+            except (ValueError, TypeError) as exc:
+                error.set_text(str(exc))
+                return
+            definition = copy.deepcopy(self.definition)
+            definition['tests'][identity] = spec_validated
+            drafts = dict(self.parameter_drafts)
+            drafts[identity] = self.parameters_for_test(identity)
+            bindings = {role:picker.get_active_id() for role,picker in self.pickers.items()}
+            checked = self.selected_tests()
+            busy = True
+            save.set_sensitive(False)
+            def completed(result):
+                nonlocal busy
+                busy = False
+                if result['state'] == 'failed':
+                    error.set_text(result.get('error', 'Unable to save waveform settings'))
+                    save.set_sensitive(True)
+                    return
+                view = self.owner.experiment_views.get(definition['id'])
+                if view:
+                    view.parameter_drafts = drafts
+                    view.selected_test = None
+                    if view.test_picker.get_active_id() != identity:
+                        view.test_picker.set_active_id(identity)
+                    else:
+                        view.choose_test()
+                    for role, picker in view.pickers.items():
+                        if bindings.get(role):
+                            picker.set_active_id(bindings[role])
+                    for test, check in view.test_checks.items():
+                        check.set_active(test in checked)
+                    view.tabs.set_current_page(view.tabs.page_num(view.instrument_page))
+                dialog.destroy()
+            self.owner.command('save_experiment', experiment=definition, on_complete=completed)
+        dialog.connect('response', respond)
+        dialog.connect('close-request', lambda *_: busy)
+        dialog.capture_controls = controls
+        dialog.present()
+        return dialog
+
     def add_secondary_measurements(self):
         from gate.secondary import add_observations
         from gate.experiments import validate_definition
@@ -560,6 +666,8 @@ class ExperimentView(Gtk.Box):
             details.set_text(text)
             if capture.get('screenshot_error'):
                 details.set_text(text+'\nScope screenshot unavailable: '+capture['screenshot_error'])
+            elif not capture.get('screenshot') and not capture.get('screenshot_requested', capture['phase'] == 'transition'):
+                details.set_text(text+'\nScope screenshot was not requested. Enable it in Instruments → Waveform Channels & Screenshots.')
             has_screen = bool(capture.get('screenshot') and Path(capture['screenshot']).is_file())
             for widget in (screen_label, screen, open_screen):
                 widget.set_visible(has_screen)
@@ -614,6 +722,7 @@ class ExperimentView(Gtk.Box):
         self.cancel.set_sensitive(False)
         self.demo.set_sensitive(False)
         self.add_secondary_button.set_sensitive(False)
+        self.capture_settings_button.set_sensitive(False)
         self.edit_spec_button.set_sensitive(False)
         self.status.set_text('Start the background service in Devices & Settings to run experiments.')
 
@@ -652,7 +761,10 @@ class ExperimentView(Gtk.Box):
                 verification = ' · Bench verification pending' if any('pending' in value.get('verification', '') for value in device['waveform_capabilities'].values()) else ''
                 self.role_status[role].set_text('Waveforms: '+', '.join(dict.fromkeys(modes))+verification)
             elif device:
-                self.role_status[role].set_text('Records the instrument’s current readings' if role not in self.controlled_roles() else 'Choose equipment')
+                if device.get('device_type') == 'HANTEK:365' and 'measure.temperature' in self.definition['roles'][role]['capabilities']:
+                    self.role_status[role].set_text('One thermocouple input · Select Celsius for °C metrics. A separate probe is needed for independent ambient temperature.')
+                else:
+                    self.role_status[role].set_text('Records the instrument’s current readings' if role not in self.controlled_roles() else 'Choose equipment')
         needed = set().union(*(required_roles(self.definition, test_spec(self.definition, identity)) for identity in tests)) if tests else set()
         compatible = all(identity in available and set(self.definition['roles'][role]['capabilities']) <=
                          set(available[identity].get('experiment_capabilities', [])) for role, identity in selected.items() if role in needed)
@@ -669,6 +781,7 @@ class ExperimentView(Gtk.Box):
         self.cancel.set_sensitive(self.owner.online and running and active is not None and active['experiment'] == self.definition['id'])
         self.demo.set_sensitive(self.owner.online and supported and not running)
         self.add_secondary_button.set_sensitive(self.owner.online and supported and not running)
+        self.capture_settings_button.set_sensitive(self.owner.online and supported and not running and not self.saving and bool(self.current_spec().get('waveforms')))
         self.test_picker.set_sensitive(not running and not self.saving)
         self.parameter_rows.set_sensitive(not running and not self.saving)
         self.edit_spec_button.set_sensitive(self.owner.online and supported and not running and not self.saving)

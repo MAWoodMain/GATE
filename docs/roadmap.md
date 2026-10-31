@@ -7,6 +7,8 @@
 3. Validate the GNOME top bar on Ubuntu 24.04 GNOME 46 and newer target Shell releases. Add persistent channel selection and compact engineering-unit formatting.
 4. Fluke 45 primary serial acquisition is now verified; next validate dual-display/modifier variants and add the first bench PSU after its exact model is known. Include channel capabilities, limits, explicit arming, readback checks, and verified stop behavior.
 
+5. Hantek 365 direct USB discovery, temperature acquisition, Celsius/Fahrenheit switching, recording and passive experiments are verified on a 365B with the supplied thermocouple. Next compare against calibrated references and verify electrical ranges and other family models.
+
 ## Bench workflows
 
 - Experiments now have compatible equipment selection, parameterised capture/converter procedures, verified-control/limit checks, settled acquisition, derived metrics and persistent reports/charts. The paired simulator exercises converter sweeps. Next add real verified PSU/load drivers, channel-level assignments, additional procedure types and configurable plot templates.
