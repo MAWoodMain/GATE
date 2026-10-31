@@ -53,9 +53,15 @@ try:
             editor.add_wire([role['id'] + '.negative', 'dut.input_negative'])
             assert len(editor.definition()['connections']) == 2
             editor.load_example()
+            editor.tests[0]['specification'].get_buffer().set_text('{invalid JSON')
+            editor.response(Gtk.ResponseType.ACCEPT)
+            assert editor.error.get_visible() and not editor.saving
+            editor.load_example()
             definition = editor.definition()
+            assert definition['tests']['efficiency']['schema_version'] == 1
             assert len(definition['connections']) == 4
-            assert len(definition['roles']) == 2
+            assert {key for key, role in definition['roles'].items() if not role.get('optional', False)} == {'supply', 'load'}
+            assert definition['roles']['thermal']['optional'] and not definition['roles']['thermal']['terminals']
             assert len(definition['tests']) == 2
             # Role and terminal edits invalidate old wiring instead of retargeting it.
             editor.dut_terminals.set_text('Different terminal')
@@ -111,7 +117,8 @@ try:
             definition = call(proxy(), 'Snapshot')['experiments'][editor.identity]
             assert definition['name'] == 'Created in desktop smoke test'
             assert len(definition['connections']) == 4
-            assert len(definition['roles']) == 2
+            assert {key for key, role in definition['roles'].items() if not role.get('optional', False)} == {'supply', 'load'}
+            assert definition['roles']['thermal']['optional'] and not definition['roles']['thermal']['terminals']
             assert len(definition['tests']) == 2
             cancelled = window.new_experiment()
             dialogs.append(cancelled)

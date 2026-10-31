@@ -197,6 +197,83 @@ class ExperimentRunTests(unittest.TestCase):
         self.assertIn('current exceeded', run.metadata['error'])
         self.assertFalse(self.supply.enabled or self.load.enabled)
 
+    def sequence_args(self):
+        common = dict(input_start_v=8., input_stop_v=8., load_start_a=.1, load_stop_a=.1, settle_s=.1)
+        return dict(experiment='buck_converter', bindings=self.args['bindings'], enable_outputs=True, wiring_confirmed=True,
+            tests=[dict(test='efficiency', parameters=common), dict(test='maximum_output_current', parameters=dict(common, input_start_v=10., input_stop_v=10.))])
+
+    def finish_sequence(self):
+        for _ in range(30):
+            if self.engine.experiment_sequence['state'] != 'running':
+                return
+            self.tick()
+        self.fail('Sequence did not finish')
+
+    def test_sequence_order_parameters_outputs_and_separate_results(self):
+        self.load.set_enabled = Mock(wraps=self.load.set_enabled)
+        sequence = self.engine.command('start_experiment_sequence', self.sequence_args())
+        self.assertEqual(sequence['tests'][1]['state'], 'pending')
+        self.finish_sequence()
+        sequence = self.engine.snapshot()['experiment_sequence']
+        self.assertEqual(sequence['state'], 'completed')
+        self.assertEqual(sequence['completed_tests'], 2)
+        self.assertEqual([item['state'] for item in sequence['tests']], ['completed', 'completed'])
+        runs = list(reversed(self.engine.snapshot()['experiment_runs']))
+        self.assertEqual([run['test'] for run in runs], ['efficiency', 'maximum_output_current'])
+        self.assertEqual([run['points'][0]['input_voltage_set_v'] for run in runs], [8., 10.])
+        self.assertEqual([run['sequence_index'] for run in runs], [0, 1])
+        self.assertTrue(all(run['sequence_id'] == sequence['id'] for run in runs))
+        enabled = [call.args[0] for call in self.load.set_enabled.call_args_list]
+        self.assertEqual(enabled, [False, True, False, False, True, False])
+        self.assertTrue(all(Path(run['report']).is_file() for run in runs))
+        self.assertFalse(self.supply.enabled or self.load.enabled)
+
+    def test_sequence_validates_entire_queue_before_touching_outputs(self):
+        for mutation in ('bad_parameters', 'unknown_test', 'duplicate', 'empty'):
+            args = self.sequence_args()
+            if mutation == 'bad_parameters':
+                args['tests'][1]['parameters']['input_stop_v'] = 31.
+            elif mutation == 'unknown_test':
+                args['tests'][1]['test'] = 'missing'
+            elif mutation == 'duplicate':
+                args['tests'][1]['test'] = 'efficiency'
+            else:
+                args['tests'] = []
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                self.engine.command('start_experiment_sequence', args)
+            self.assertFalse(self.supply.enabled or self.load.enabled)
+            self.assertIsNone(self.engine.experiment_sequence)
+            self.assertEqual(list(Path(self.folder.name).iterdir()), [])
+
+    def test_sequence_failure_and_cancel_skip_pending_tests(self):
+        self.engine.command('start_experiment_sequence', self.sequence_args())
+        self.load.read = lambda: [Reading('voltage', None, 'V', 'unavailable'), Reading('current', .1, 'A')]
+        self.tick()
+        sequence = self.engine.experiment_sequence
+        self.assertEqual(sequence['state'], 'failed')
+        self.assertEqual([test['state'] for test in sequence['tests']], ['failed', 'skipped'])
+        self.assertEqual(len(self.engine.experiment_history), 1)
+        self.engine.command('start_experiment_sequence', self.sequence_args())
+        self.engine.command('cancel_experiment', {})
+        sequence = self.engine.experiment_sequence
+        self.assertEqual(sequence['state'], 'cancelled')
+        self.assertEqual([test['state'] for test in sequence['tests']], ['cancelled', 'skipped'])
+        self.assertFalse(self.supply.enabled or self.load.enabled)
+        self.engine.cycle()
+        self.assertEqual(len(self.engine.experiment_history), 2)
+
+    def test_sequence_service_stop_and_equipment_change_clear_pending_tests(self):
+        self.engine.command('start_experiment_sequence', self.sequence_args())
+        self.engine.command('disconnect', dict(instrument=self.load.id))
+        self.assertEqual(self.engine.experiment_sequence['state'], 'cancelled')
+        self.assertEqual(self.engine.experiment_sequence['tests'][1]['state'], 'skipped')
+        self.engine.command('demo_experiment', {})
+        self.engine.command('start_experiment_sequence', self.sequence_args())
+        self.engine.stop_event.set()
+        self.engine.run()
+        self.assertEqual(self.engine.experiment_sequence['state'], 'cancelled')
+        self.assertEqual(self.engine.experiment_sequence['tests'][1]['state'], 'skipped')
+
     def test_parameter_bounds_and_endpoint_clamping(self):
         self.assertEqual(sweep_values(1., 2., .6), [1., 1.6, 2.])
         with self.assertRaises(ValueError):

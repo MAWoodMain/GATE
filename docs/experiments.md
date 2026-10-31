@@ -6,18 +6,30 @@ The built-in buck converter arrangement connects the DC supply to the converter 
 
 ## Run an experiment
 
-Open its sidebar page and use **Setup & Run**:
+Open its sidebar page. **Summary** contains the DUT, functional requirements, wiring, tests and recorded metrics. Configure the run in the following tabs:
 
-1. Choose a compatible connected instrument for each role. Selections survive normal refreshes; a disconnected selection is marked unavailable rather than silently replaced. Each role requires a separate instrument.
-2. Choose a test and set its parameters. Converter sweeps expose input-voltage and output-load start/stop/step values, settling time, samples per point, a supply current limit, expected output voltage and regulation tolerance. Capture exposes its number of polling cycles. The current acquisition interval determines the capture rate and minimum settling time.
-3. For output sweeps, check the wiring/limits confirmation and select **Run & Enable Outputs**. This explicitly permits output enabling for that run. **Start Capture** acquires current readings without changing hardware configuration or outputs.
-4. **Stop Experiment** cancels the run. Completed runs open the **Results** tab, with a chart, table, full report and CSV export. The run selector retains recent results.
+1. In **Instruments**, choose a compatible connected instrument for each role. Selections survive normal refreshes; a disconnected selection is marked unavailable rather than silently replaced. Primary/output roles require separate instruments; optional observation roles may reuse an instrument.
+2. In **Parameters**, choose a test and set its parameters. Converter sweeps expose input-voltage and output-load start/stop/step values, settling time, samples per point, a supply current limit, expected output voltage and regulation tolerance. Capture exposes its number of polling cycles. The current acquisition interval determines the capture rate and minimum settling time.
+3. In **Run**, tick the tests you want to execute. Checked tests run from top to bottom, with the individual settings you entered for each test in **Parameters**. For output sweeps, check the wiring/limits confirmation and select **Run Selected Tests & Enable Outputs**. This explicitly permits output enabling for that run. **Run Selected Tests** for a capture-only selection acquires current readings without changing hardware configuration or outputs.
+4. **Stop Tests** cancels the current test and skips all remaining tests. Successful sequences open the **Results** tab, with a chart, table, full report and CSV export. The run selector retains recent results.
 
 **Add Simulated Converter Bench** adds a coupled supply, 5 V converter and electronic load simulation, separate from the original demo instruments. The simulated DUT has a 3 A regulation knee and a load-dependent efficiency. It allows both converter tests to run end to end without real equipment. Runs containing simulation are labelled. Adding the simulator does not enable its outputs.
 
 GATE still has no verified real PSU or electronic-load driver. Converter sweeps require drivers with verified typed controls and limits, so existing meters and scopes cannot fill those output roles. To record those instruments, create a role with **Capture current instrument readings** and choose **Measurement capture** as the test procedure. This reads the instrument's existing functions and leaves front-panel settings unchanged.
 
-## Procedures, metrics and presentation
+A sequence can contain up to 20 distinct tests. The first test is initially checked; changing the parameter-editor test does not change the Run-tab checkboxes. Values for each test are retained while switching between parameter pages. All selected tests and equipment limits are validated before any output changes. Outputs are disabled between tests. A failure, cancellation, connection change or service shutdown ends the sequence and marks pending tests skipped. Each executed test keeps a separate result, with a shared sequence ID and its position recorded in the run metadata.
+
+Sequencing belongs to the background service and continues if the window closes. Queues never resume after service restart. Per-test status and overall sequence progress appear on the Run tab; finished results are selectable individually in Results.
+
+## Secondary observations
+
+Use **Instruments → Add Secondary Measurements…** for optional DUT/ambient temperature channels, ripple snapshots or pre-armed protection waveforms. Temperatures are recorded continuously, including settling, while waveform captures retain full samples, statistics and point context. Required observations can be configured in JSON. See [the observation contract and driver support](secondary-measurements.md).
+
+## JSON tests, metrics and presentation
+
+Tests now use [declarative schema version 1](test-spec.md). The table below describes bundled JSON starting examples, not hard-coded runner procedures. You can edit sweeps, calculations, checks and charts through **Parameters → Edit Test JSON…**, and new tests have a JSON specification editor in the creation form. Custom numeric parameters automatically become form fields.
+
+### Bundled examples
 
 | Procedure | Parameters | Automatic metrics | Default output |
 |---|---|---|---|
@@ -25,7 +37,7 @@ GATE still has no verified real PSU or electronic-load driver. Converter sweeps 
 | Converter efficiency sweep | Input voltage grid, load current grid, settling, averaging, current limit, expected output and tolerance | Input/output V and A, mean input/output power, efficiency, regulation status, setpoints and elapsed time | Efficiency versus measured output current, one curve per input-voltage setpoint |
 | Maximum output current sweep | Same sweep and regulation parameters | Same per-point metrics, plus last acceptable measured current for each input voltage | Maximum acceptable output current versus input-voltage setpoint |
 
-Sweeps include their endpoints, clamping the final step if necessary. Only increasing sweeps are supported. A run is limited to 1000 grid points, with up to 100 samples per point. Samples are taken on successive acquisition cycles after settling. Input/output power is averaged from each voltage/current pair; efficiency is the ratio of the two mean powers. Zero input power gives unavailable efficiency, never a fabricated zero. Missing required readbacks fail an output sweep; capture preserves unavailable readings and quality flags.
+Sweeps include their endpoints, clamping the final step if necessary. Descending sweeps use a negative step; explicit value lists are also supported. A run is limited to 1000 grid points, with up to 100 samples per point. Samples are taken on successive acquisition cycles after settling. Input/output power is averaged from each voltage/current pair; efficiency is the ratio of the two mean powers. Zero input power gives unavailable efficiency, never a fabricated zero. Missing required readbacks fail an output sweep; capture preserves unavailable readings and quality flags.
 
 Maximum-current tests stop increasing current at the first point outside the configured voltage tolerance, then continue at the next input voltage. If the first point fails, the maximum is unavailable. If every point passes, the result is labelled **at least sweep limit**, a lower bound rather than a measured failure threshold. This identifies a voltage-regulation boundary; it does not diagnose which protection mechanism caused it. Efficiency sweeps stop if the output leaves regulation. Negative DC readbacks, overvoltage and current-limit violations stop a sweep.
 
@@ -51,13 +63,13 @@ Choose **New Experiment…** in the sidebar:
 1. **Overview**: name, purpose, DUT and comma-separated terminal names, or load the buck converter example.
 2. **Equipment**: add named roles, their terminals, and functional requirements.
 3. **Wiring**: use terminal pickers to connect declared endpoints. Every terminal must participate. Removed endpoints must be chosen again.
-4. **Tests**: give each test a name, an executable procedure, and a description. Converter procedures require exactly one DC source role and one distinct current-sink role.
+4. **Tests**: give each test a name and description, then edit its JSON specification or load a starting template. Equipment role identifiers shown in the form are the identifiers used by controls and measurements.
 
 **Create** validates and saves through the service. Errors retain the draft. Success opens the new page; **Cancel** discards the draft. Display names may repeat, but each new definition receives a unique ID.
 
 ## Agent API
 
-`GET /v1/experiments` returns the definition map, also present in `/v1/state`. `GET /v1/experiment-runs` returns `active` (the current or most recently finished run) and `runs` (the latest 20 finished runs across experiments). `/v1/state` also exposes `experiment_run`, `experiment_runs`, and `experiment_execution_version: 1`. Historical artifacts remain on disk beyond the 20-run UI/API list.
+`GET /v1/experiments` returns the definition map, also present in `/v1/state`. `GET /v1/experiment-runs` returns `sequence` (the current/latest test sequence), `active` (the current or most recently finished run) and `runs` (the latest 20 finished runs across experiments). `/v1/state` also exposes `experiment_run`, `experiment_runs`, `experiment_sequence`, `experiment_sequence_version: 1`, `experiment_spec_version: 1`, and `experiment_execution_version: 1`. Historical artifacts remain on disk beyond the 20-run UI/API list.
 
 Using authenticated `GateClient`:
 
@@ -77,9 +89,11 @@ state = api.request('/v1/experiment-runs')
 api.command('cancel_experiment')
 ```
 
+To queue multiple tests, use `start_experiment_sequence` instead of `start_experiment`, with the same `experiment`, `bindings`, `enable_outputs` and `wiring_confirmed` arguments. Pass `tests=[{'test': 'efficiency', 'parameters': {...}}, {'test': 'maximum_output_current', 'parameters': {...}}]` in execution order. Each test has its own parameter object; defaults apply to omitted values. Command completion acknowledges the start of the sequence. Inspect `sequence.state`, `sequence.tests`, `sequence.index` and `sequence.completed_tests` for progress. `cancel_experiment` stops the sequence as well as its active test.
+
 `save_experiment`, `delete_experiment` and `check_experiment` manage definitions and check role bindings. `check_experiment` checks functional capability declarations only; starting an output sweep additionally validates verified controls and operating limits. Neither saving nor checking changes outputs.
 
-Definitions contain `id`, `name`, `description`, `dut`, `roles`, `connections` and `tests`. Equipment roles contain `name`, `capabilities` and `terminals`. Connections join declared `component.terminal` endpoints, reserving `dut` for the DUT. Test values are `{description, procedure}` objects, with `procedure` equal to `capture`, `efficiency` or `maximum_output_current`. Existing string descriptions remain supported: legacy test IDs `efficiency` and `maximum_output_current` map to their corresponding procedures; other legacy tests default to capture. Extra parameters and unsupported procedures are rejected; descriptions are not evaluated as code.
+Definitions contain `id`, `name`, `description`, `dut`, `roles`, `connections` and `tests`. Equipment roles contain `name`, `capabilities` and `terminals`. Connections join declared `component.terminal` endpoints, reserving `dut` for the DUT. Test values use the [versioned JSON test contract](test-spec.md), including their own parameter, sweep, measurement, calculation and rendering definitions. Legacy `{description, procedure}` objects and string descriptions are converted to schema version 1 on load/save. Unknown fields, references and expression syntax are rejected; descriptions are never evaluated as code. The structural JSON Schema is bundled at `gate/templates/test-v1.schema.json`.
 
 ## Driver contract
 
@@ -87,4 +101,4 @@ Definitions contain `id`, `name`, `description`, `dut`, `roles`, `connections` a
 
 An output driver must additionally opt into `experiment_control_supported = True`, provide finite `experiment_limits = {'voltage': [min, max], 'current': [min, max], 'power_w': rating}` and `experiment_channels = {'voltage': channel_id, 'current': channel_id}`. Both readbacks must return V/A readings with quality. A supply implements verified `set_voltage`, `set_current_limit`, and `set_enabled`; a load implements verified `set_current` (including safe zero) and `set_enabled`. These methods must bound I/O, enforce model-specific limits and confirm actual state, especially output enable/disable. Limit checks use the planned input range/current limit and the expected output voltage, tolerance and load range. They do not replace DUT-specific ratings, physical wiring checks, interlocks or driver protections.
 
-GATE never infers output controls from instrument identity, category or arbitrary SCPI access. Output sweeps reject mixed real/simulated bindings. Multi-channel assignment, arbitrary scripted procedures, adaptive searches beyond the predefined current sweep, and configurable presentation templates remain future work.
+GATE never infers output controls from instrument identity, category or arbitrary SCPI access. Output sweeps reject mixed real/simulated bindings. JSON-defined sweeps, numeric expressions, grouped reductions, stop conditions, tables and charts are supported without adding procedure code. Multi-channel instrument assignment, arbitrary scripts and adaptive searches remain future work. Drivers may declare `experiment_required_controls` so a generic output test cannot enable an instrument without configuring its required controls.

@@ -53,6 +53,8 @@ def build(version,output,work=None):
         installed_readme.write_text(installed_readme.read_text().replace('(packaging/INSTALL.md)','(INSTALL.md)'))
         for source in sorted((ROOT/'docs').glob('*.md')):
             copy(str(source.relative_to(ROOT)),doc+'/docs/'+source.name)
+        for source in sorted((ROOT/'gate/templates').glob('*.json')):
+            copy(str(source.relative_to(ROOT)),doc+'/gate/templates/'+source.name)
         copy('packaging/INSTALL.md',doc+'/INSTALL.md')
         copyright_text=('Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\n'
             'Upstream-Name: GATE\nSource: https://github.com/MAWoodMain/GATE\n\n'

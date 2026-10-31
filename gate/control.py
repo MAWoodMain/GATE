@@ -10,7 +10,9 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from gate import __version__
 
-ACTIONS = {'demo_experiment', 'start_experiment', 'cancel_experiment', 'save_experiment', 'delete_experiment', 'check_experiment', 'scan', 'connect', 'edit_device', 'instrument_settings', 'display_measurements', 'copy_settings', 'forget', 'disconnect', 'settings', 'demo', 'record', 'stop_recording', 'select_function',
+MAX_COMMAND_BYTES = 1048576
+
+ACTIONS = {'start_experiment_sequence', 'demo_experiment', 'start_experiment', 'cancel_experiment', 'save_experiment', 'delete_experiment', 'check_experiment', 'scan', 'connect', 'edit_device', 'instrument_settings', 'display_measurements', 'copy_settings', 'forget', 'disconnect', 'settings', 'demo', 'record', 'stop_recording', 'select_function',
            'static', 'sweep', 'output', 'cancel_sweep', 'query', 'write'}
 
 def runtime_directory():
@@ -63,7 +65,7 @@ class ControlServer:
                 elif parts == ['v1', 'state']:
                     self.reply(200, state)
                 elif parts == ['v1', 'experiment-runs']:
-                    self.reply(200, {'active': state.get('experiment_run'), 'runs': state.get('experiment_runs', [])})
+                    self.reply(200, {'active': state.get('experiment_run'), 'runs': state.get('experiment_runs', []), 'sequence': state.get('experiment_sequence')})
                 elif parts == ['v1', 'experiments']:
                     self.reply(200, {'experiments': state['experiments']})
                 elif parts == ['v1', 'instruments']:
@@ -92,8 +94,8 @@ class ControlServer:
                         self.reply(400, {'error': 'Chunked requests are not supported'})
                         return
                     length = int(self.headers.get('Content-Length', '0'))
-                    if not 0 < length <= 16384:
-                        self.reply(413, {'error': 'Body must be 1–16384 bytes'})
+                    if not 0 < length <= MAX_COMMAND_BYTES:
+                        self.reply(413, {'error': f'Body must be 1–{MAX_COMMAND_BYTES} bytes'})
                         return
                     body = self.rfile.read(length)
                     if len(body) != length:

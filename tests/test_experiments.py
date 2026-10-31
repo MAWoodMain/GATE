@@ -10,7 +10,7 @@ from gate.experiments import BUCK_CONVERTER, validate_definition
 class ExperimentTests(unittest.TestCase):
     def test_definition_is_model_independent_and_wires_through_dut(self):
         definition = validate_definition(BUCK_CONVERTER)
-        self.assertEqual(set(definition['roles']), {'supply', 'load'})
+        self.assertEqual({key for key, role in definition['roles'].items() if not role.get('optional', False)}, {'supply', 'load'})
         self.assertTrue(all(any(endpoint.startswith('dut.') for endpoint in wire)
                             for wire in definition['connections']))
         definition['roles']['supply']['name'] = 'Changed'

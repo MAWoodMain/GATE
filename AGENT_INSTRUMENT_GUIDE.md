@@ -34,7 +34,7 @@ for device in devices:
 
 ## HTTP contract
 
-Every request requires `Authorization: Bearer <token>`. POST bodies require `Content-Type: application/json` and a Content-Length of at most 16384 bytes. There is no CORS or anonymous API.
+Every request requires `Authorization: Bearer <token>`. POST bodies require `Content-Type: application/json` and a Content-Length of at most 1048576 bytes (1 MiB, to accommodate declarative experiment definitions). There is no CORS or anonymous API.
 
 | Endpoint | Purpose |
 |---|---|
@@ -214,3 +214,9 @@ Commands are limited to one line, 256 characters, no semicolon batches. `query` 
 ## Experiments
 
 Use `save_experiment`, `delete_experiment`, and `check_experiment` to manage arrangements and check role bindings. Definitions include the DUT and its wiring, functional equipment requirements, and named test descriptions. Checks never configure hardware or energise outputs. `demo_experiment` adds a coupled simulated converter bench. `start_experiment` starts an asynchronous test with bindings and parameters; converter sweeps require explicit `enable_outputs=true` and `wiring_confirmed=true`. Poll `/v1/experiment-runs` for run completion, independently of command completion, and use `cancel_experiment` to stop. Each procedure defines its automatic metrics and presentation; results include SQLite, CSV, SVG and HTML artifacts. Output sweeps disable both ends at completion or cancellation; real PSU/load drivers are still pending. See [the experiment contract and buck converter example](docs/experiments.md).
+
+Tests are schema-v1 JSON objects, not fixed Python procedure types. See [the generic test specification](docs/test-spec.md) for sweeps, expressions, reductions, checks and rendering. `experiment_spec_version: 1` in the snapshot advertises support. Legacy definitions migrate on load/save; each run retains its resolved test JSON. The HTTP request limit is 1 MiB to accommodate larger definitions.
+
+Secondary measurements use optional roles (`optional: true`, empty terminals permitted), `secondary_measurements` for scalar probes, and `waveforms` for settled/transition captures. Snapshots advertise `secondary_measurements_version: 1` and driver `waveform_capabilities`. Missing optional probes preserve primary test validity. Mark observations required for preflight/fail-closed behavior. Waveform data/CSV/SVG references and scalar statistics appear in run metadata; raw samples live in the run database. See [secondary measurement semantics and hardware verification status](docs/secondary-measurements.md).
+
+Scope channel/single-shot behaviour: scalar polling never measures off traces. Runs temporarily select the union of scalar and waveform channels and restore trace states afterward. SDS1202X-E transition captures use the current timebase/pre-trigger position (`window_s`/`pretrigger` null), program/verify the edge trigger, wait for readiness, and require a fresh acquisition with STOP before waveform and BMP screen transfer. Screens are saved by default for transition captures (`screenshot: false` opts out), displayed in Results and linked in reports. Trigger settings restore on capture cleanup. These additions are protocol-fixture tested and await hardware verification. See [secondary measurements](docs/secondary-measurements.md).

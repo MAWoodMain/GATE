@@ -12,11 +12,11 @@ from pathlib import Path
 from gate import discovery
 from gate.connections import validate_resource
 from gate.identity import identify, migrate
-from gate.drivers.simulated import Simulated, ConverterBench
+from gate.drivers.simulated import Simulated, ConverterBench, SimulatedThermometer, SimulatedWaveformRecorder
 from gate.model import Reading, MeasurementFunction
 from gate.storage import Recorder
 from gate.experiments import BUCK_CONVERTER, validate_definition, check_bindings
-from gate.experiment_runs import ExperimentRun, data_directory, history
+from gate.experiment_runs import ExperimentPlan, ExperimentRun, data_directory, history
 
 class Engine:
     def __init__(self, interval=None, profile_path=None, experiment_directory=None):
@@ -43,6 +43,8 @@ class Engine:
         self.sweeps = {}
         self.experiment_directory = Path(experiment_directory) if experiment_directory else data_directory()
         self.experiment_run = None
+        self.experiment_sequence = None
+        self.sequence_context = None
         self.experiment_history = history(self.experiment_directory)
         self.recorder = None
         self.origin = time.monotonic_ns()
@@ -52,7 +54,7 @@ class Engine:
         self.stop_event = threading.Event()
         self.wake_event = threading.Event()
         self.lock = threading.Lock()
-        self.state = dict(experiment_run=None, experiment_runs=copy.deepcopy(self.experiment_history), experiment_execution_version=1, experiments=copy.deepcopy(self.experiments), instruments=[], recording=False, log_path="", tick=0,
+        self.state = dict(secondary_measurements_version=1, experiment_spec_version=1, experiment_sequence=None, experiment_sequence_version=1, experiment_run=None, experiment_runs=copy.deepcopy(self.experiment_history), experiment_execution_version=1, experiments=copy.deepcopy(self.experiments), instruments=[], recording=False, log_path="", tick=0,
                           interval_s=self.interval, configured_resources=sorted(self.saved_resources), saved_devices=copy.deepcopy(self.saved_devices), instrument_profiles=copy.deepcopy(self.instrument_profiles), connections=copy.deepcopy(self.connections), controls={}, commands={}, status="Ready", inventory=discovery.usb_inventory(), demo=False)
         self.thread = None
     def submit(self, action, **args):
@@ -146,6 +148,8 @@ class Engine:
                 card['experiment_capabilities'] = list(getattr(instrument, 'experiment_capabilities', ()))
                 card['experiment_control_supported'] = bool(getattr(instrument, 'experiment_control_supported', False))
                 card['experiment_limits'] = copy.deepcopy(getattr(instrument, 'experiment_limits', {}))
+                card['waveform_capabilities'] = copy.deepcopy(getattr(instrument, 'waveform_capabilities', {}))
+                card['experiment_channels'] = copy.deepcopy(getattr(instrument, 'experiment_channels', {}))
                 card.update(name=profile['name'] or instrument.name, custom_name=profile['name'], resource=resource, instrument_id=key,
                             device_type=profile['type'], serial=profile['serial'], settings=copy.deepcopy(profile['settings']))
             self.state['instruments'] = list(cards.values())
@@ -275,17 +279,99 @@ class Engine:
             with self.lock:
                 self.state['experiment_run'] = metadata
                 self.state['experiment_runs'] = copy.deepcopy(self.experiment_history)
+        with self.lock:
+            self.state['experiment_sequence'] = copy.deepcopy(self.experiment_sequence)
+
+    def start_sequence_test(self):
+        sequence, context = self.experiment_sequence, self.sequence_context
+        item = sequence['tests'][sequence['index']]
+        try:
+            self.experiment_run = ExperimentRun(context['definition'], item['test'], context['bindings'],
+                item['parameters'], self.instruments, self.resolve, self.interval, self.experiment_directory,
+                context['enable_outputs'], context['wiring_confirmed'], sequence['id'], sequence['index'])
+            item.update(state='running', run_id=self.experiment_run.metadata['id'])
+        except Exception as exc:
+            item.update(state='failed', error=str(exc))
+            self.stop_sequence('failed', str(exc))
+
+    def advance_sequence(self):
+        sequence = self.experiment_sequence
+        if not sequence or sequence['state'] != 'running':
+            return
+        while sequence['state'] == 'running':
+            run = self.experiment_run
+            if run.active:
+                break
+            item = sequence['tests'][sequence['index']]
+            item.update(state=run.metadata['state'], error=run.metadata['error'])
+            sequence['completed_tests'] = sum(test['state'] == 'completed' for test in sequence['tests'])
+            if run.metadata['state'] != 'completed':
+                self.stop_sequence(run.metadata['state'], run.metadata['error'])
+                break
+            if sequence['index'] + 1 == len(sequence['tests']):
+                sequence.update(state='completed', finished_utc_ns=time.time_ns())
+                break
+            sequence['index'] += 1
+            self.start_sequence_test()
+        self.publish_experiment()
+
+    def stop_sequence(self, state, error):
+        sequence = self.experiment_sequence
+        if not sequence or sequence['state'] != 'running':
+            return
+        # Mark stopped before disabling so no queued test can be started afterward.
+        sequence.update(state=state, error=error, finished_utc_ns=time.time_ns())
+        run = self.experiment_run
+        if run and run.active:
+            run.finish('cancelled', error)
+        item = sequence['tests'][sequence['index']]
+        if run and run.metadata.get('sequence_id') == sequence['id'] and item.get('run_id') == run.metadata['id']:
+            item.update(state=run.metadata['state'], error=run.metadata['error'])
+            if run.metadata['state'] == 'failed':
+                sequence.update(state='failed', error=run.metadata['error'])
+        for test in sequence['tests']:
+            if test['state'] == 'pending':
+                test['state'] = 'skipped'
+        self.publish_experiment()
 
     def command(self, action, args):
-        if self.experiment_run and self.experiment_run.active:
+        if (self.experiment_run and self.experiment_run.active) or (self.experiment_sequence and self.experiment_sequence['state'] == 'running'):
             if action in ('disconnect', 'forget', 'edit_device'):
-                self.experiment_run.finish('cancelled', 'Equipment configuration changed')
+                if self.experiment_sequence and self.experiment_sequence['state'] == 'running':
+                    self.stop_sequence('cancelled', 'Equipment configuration changed')
+                else:
+                    self.experiment_run.finish('cancelled', 'Equipment configuration changed')
                 self.publish_experiment()
             elif action in ('settings', 'scan', 'connect', 'query', 'write', 'static', 'sweep', 'output',
                             'cancel_sweep', 'select_function', 'display_measurements', 'instrument_settings',
-                            'copy_settings', 'start_experiment', 'demo_experiment'):
+                            'copy_settings', 'start_experiment', 'start_experiment_sequence', 'demo_experiment'):
                 raise ValueError('Stop the active experiment before changing equipment or acquisition settings')
-        if action == 'start_experiment':
+        if action == 'start_experiment_sequence':
+            definition = copy.deepcopy(self.experiments[args['experiment']])
+            tests = args.get('tests')
+            if not isinstance(tests, list) or not 1 <= len(tests) <= 20:
+                raise ValueError('Select between 1 and 20 tests to run sequentially')
+            validated = []
+            for test in tests:
+                if (not isinstance(test, dict) or set(test) != {'test', 'parameters'}
+                        or not isinstance(test['test'], str) or test['test'] not in definition['tests']):
+                    raise ValueError('Each selected test requires a known test ID and its parameters')
+                if any(item['test'] == test['test'] for item in validated):
+                    raise ValueError('Select each test only once')
+                plan = ExperimentPlan(definition, test['test'], args.get('bindings', {}), test['parameters'],
+                    self.instruments, self.resolve, self.interval, args.get('enable_outputs', False), args.get('wiring_confirmed', False))
+                validated.append(dict(test=test['test'], parameters=plan.parameters, state='pending', run_id=None, error=''))
+            if self.sweeps:
+                raise ValueError('Cancel instrument sweeps before starting an experiment')
+            self.sequence_context = dict(definition=definition, bindings=plan.bindings,
+                enable_outputs=args.get('enable_outputs', False), wiring_confirmed=args.get('wiring_confirmed', False))
+            self.experiment_sequence = dict(id=uuid.uuid4().hex, experiment=definition['id'], tests=validated,
+                index=0, state='running', error='', completed_tests=0, started_utc_ns=time.time_ns(), finished_utc_ns=None)
+            self.start_sequence_test()
+            self.advance_sequence()
+            self.publish_experiment()
+            return copy.deepcopy(self.experiment_sequence)
+        elif action == 'start_experiment':
             definition = self.experiments[args['experiment']]
             if self.sweeps:
                 raise ValueError('Cancel instrument sweeps before starting an experiment')
@@ -295,21 +381,28 @@ class Engine:
             self.publish_experiment()
             return copy.deepcopy(self.experiment_run.metadata)
         elif action == 'cancel_experiment':
+            if self.experiment_sequence and self.experiment_sequence['state'] == 'running':
+                self.stop_sequence('cancelled', 'Stopped by user')
             if self.experiment_run and self.experiment_run.active:
                 self.experiment_run.finish('cancelled', 'Stopped by user')
                 self.publish_experiment()
             return copy.deepcopy(self.experiment_run.metadata) if self.experiment_run else None
         elif action == 'demo_experiment':
             if not all(key in self.instruments for key in ('demo:converter_supply', 'demo:electronic_load')):
-                for key in ('demo:converter_supply', 'demo:electronic_load'):
+                for key in ('demo:converter_supply', 'demo:electronic_load', 'demo:temperatures', 'demo:waveforms'):
                     previous = self.instruments.pop(key, None)
                     if previous:
                         previous.close()
                 bench = ConverterBench()
                 for device in (bench.supply, bench.load):
                     self.instruments[device.id] = device
-            self._status('Simulated converter supply and load are available')
-            return dict(instruments=['demo:converter_supply', 'demo:electronic_load'])
+            bench = self.instruments['demo:converter_supply'].bench
+            if 'demo:temperatures' not in self.instruments:
+                self.instruments['demo:temperatures'] = SimulatedThermometer(bench)
+            if 'demo:waveforms' not in self.instruments:
+                self.instruments['demo:waveforms'] = SimulatedWaveformRecorder(bench)
+            self._status('Simulated converter, temperature probes and waveform recorder are available')
+            return dict(instruments=['demo:converter_supply', 'demo:electronic_load', 'demo:temperatures', 'demo:waveforms'])
         elif action == 'save_experiment':
             definition = validate_definition(args['experiment'])
             self.experiments[definition['id']] = definition
@@ -611,6 +704,8 @@ class Engine:
                               experiment_capabilities=list(getattr(instrument, 'experiment_capabilities', ())),
                               experiment_control_supported=bool(getattr(instrument, 'experiment_control_supported', False)),
                               experiment_limits=copy.deepcopy(getattr(instrument, 'experiment_limits', {})),
+                              waveform_capabilities=copy.deepcopy(getattr(instrument, 'waveform_capabilities', {})),
+                              experiment_channels=copy.deepcopy(getattr(instrument, 'experiment_channels', {})),
                               error=error, sweep=key in self.sweeps,
                               functions=[asdict(function) for function in self.functions(instrument, readings)],
                               current_function=getattr(instrument, "current_function", None),
@@ -623,6 +718,7 @@ class Engine:
         if self.experiment_run and self.experiment_run.active:
             self.experiment_run.advance(batches, cycle_ns)
             self.publish_experiment()
+            self.advance_sequence()
         if self.recorder:
             self.recorder.flush()
         with self.lock:
@@ -658,6 +754,8 @@ class Engine:
         except Exception as exc:
             self._status(f"Acquisition stopped: {exc}")
         finally:
+            if self.experiment_sequence and self.experiment_sequence['state'] == 'running':
+                self.stop_sequence('cancelled', 'Service stopped')
             if self.experiment_run and self.experiment_run.active:
                 self.experiment_run.finish('cancelled', 'Service stopped')
                 self.publish_experiment()

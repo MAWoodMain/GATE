@@ -1,14 +1,17 @@
 """Structured GTK experiment creation, independent of physical instruments."""
 import copy
+import json
 import re
 import uuid
 import gi
 gi.require_version('Gtk', '4.0')
 from gi.repository import Gtk
 from gate.experiments import BUCK_CONVERTER, validate_definition
-from gate.procedures import PROCEDURES, test_spec
+from gate.procedures import PROCEDURES, test_spec, load_template
 
 CAPABILITIES = {
+    'measure.temperature': 'Temperature measurements',
+    'capture.waveform': 'Waveform capture',
     'measure.scalar': 'Capture current instrument readings',
     'source.dc_voltage': 'Variable DC voltage source',
     'sink.dc_current': 'DC current load',
@@ -24,7 +27,9 @@ def identifier(text):
     return value
 
 
-def terminals(text):
+def terminals(text, optional=False):
+    if optional and not text.strip():
+        return []
     values = [identifier(item) for item in text.split(',')]
     if len(set(values)) != len(values):
         raise ValueError('Terminal names must be distinct within each device.')
@@ -108,8 +113,11 @@ class ExperimentEditor(Gtk.Dialog):
     def add_role(self, definition=None, identity=None):
         definition = definition or {}
         item = self.card(self.role_box, self.roles)
-        item['id'] = identity or 'role_' + uuid.uuid4().hex
+        item['id'] = identity or 'equipment_' + str(len(self.roles))
         item['name'] = self.field(item['box'], 'Role name', 'e.g. Input supply', definition.get('name', ''))
+        item['key'] = self.field(item['box'], 'Role identifier for test JSON', 'e.g. supply', item['id'])
+        item['optional'] = Gtk.CheckButton(label='Optional observation equipment (may be unassigned)', active=definition.get('optional', False))
+        item['box'].append(item['optional'])
         item['terminals'] = self.field(item['box'], 'Terminals', 'e.g. Positive, Negative',
                                       ', '.join(value.replace('_', ' ') for value in definition.get('terminals', [])))
         item['checks'] = {}
@@ -123,10 +131,10 @@ class ExperimentEditor(Gtk.Dialog):
 
     def endpoints(self):
         entries = []
-        components = [('dut', self.dut_name, self.dut_terminals)] + [
-            (role['id'], role['name'], role['terminals']) for role in self.roles]
-        for identity, name, field in components:
-            for terminal in terminals(field.get_text()):
+        components = [('dut', self.dut_name, self.dut_terminals, False)] + [
+            (role['key'].get_text().strip(), role['name'], role['terminals'], role['optional'].get_active()) for role in self.roles]
+        for identity, name, field, optional in components:
+            for terminal in terminals(field.get_text(), optional):
                 entries.append((identity + '.' + terminal, name.get_text().strip() + ' · ' + terminal.replace('_', ' ')))
         return entries
 
@@ -169,14 +177,15 @@ class ExperimentEditor(Gtk.Dialog):
             item[side] = picker
         return item
 
-    def add_test(self, name='', description=''):
+    def add_test(self, name='', description='', spec=None):
         item = self.card(self.test_box, self.tests)
         item['name'] = self.field(item['box'], 'Test name', 'e.g. Efficiency sweep', name)
-        item['box'].append(self.owner.label('Test procedure', 'device-title'))
+        item['box'].append(self.owner.label('Starting template', 'device-title'))
         item['procedure'] = Gtk.ComboBoxText()
         for key, label in PROCEDURES.items():
             item['procedure'].append(key, label)
-        item['procedure'].set_active_id('capture')
+        item['procedure'].append('custom', 'Custom JSON')
+        item['procedure'].set_active_id('custom' if spec else 'capture')
         item['box'].append(item['procedure'])
         item['box'].append(self.owner.label('Description', 'device-title'))
         item['description'] = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR,
@@ -187,6 +196,27 @@ class ExperimentEditor(Gtk.Dialog):
         scroll.add_css_class('frame')
         scroll.set_child(item['description'])
         item['box'].append(scroll)
+        item['box'].append(self.owner.label('JSON test specification', 'device-title'))
+        item['box'].append(self.owner.label('Version 1 defines parameters, sweep axes, channels, formulas, checks and charts. Role references use the identifiers shown in Equipment.', 'dim-label'))
+        item['specification'] = Gtk.TextView(monospace=True, wrap_mode=Gtk.WrapMode.NONE, left_margin=8, top_margin=8)
+        item['specification'].get_buffer().set_text(json.dumps(spec or load_template('capture'), indent=2))
+        json_scroll = Gtk.ScrolledWindow(min_content_height=220)
+        json_scroll.add_css_class('frame')
+        json_scroll.set_child(item['specification'])
+        item['box'].append(json_scroll)
+        def template_changed(picker):
+            kind = picker.get_active_id()
+            if kind == 'custom':
+                return
+            try:
+                roles = {role['key'].get_text().strip(): {'capabilities':[key for key, check in role['checks'].items() if check.get_active()]}
+                         for role in self.roles}
+                template = load_template(kind, roles)
+                item['specification'].get_buffer().set_text(json.dumps(template, indent=2))
+                self.show_error('')
+            except ValueError as exc:
+                self.show_error(str(exc))
+        item['procedure'].connect('changed', template_changed)
         return item
 
     def load_example(self):
@@ -205,8 +235,7 @@ class ExperimentEditor(Gtk.Dialog):
             self.add_wire(wire)
         for name in example['tests']:
             spec = test_spec(example, name)
-            item = self.add_test(name.replace('_', ' ').capitalize(), spec['description'])
-            item['procedure'].set_active_id(spec['procedure'])
+            self.add_test(name.replace('_', ' ').capitalize(), spec['description'], spec)
         self.show_error('')
 
     def definition(self):
@@ -215,15 +244,26 @@ class ExperimentEditor(Gtk.Dialog):
         for role in self.roles:
             capabilities = [key for key, check in role['checks'].items() if check.get_active()]
             capabilities += [item.strip() for item in role['extra'].get_text().split(',') if item.strip()]
-            roles[role['id']] = dict(name=role['name'].get_text().strip(), capabilities=capabilities,
-                                     terminals=terminals(role['terminals'].get_text()))
+            role_id = role['key'].get_text().strip()
+            if role_id in roles:
+                raise ValueError('Choose distinct role identifiers')
+            roles[role_id] = dict(name=role['name'].get_text().strip(), capabilities=capabilities,
+                                     terminals=terminals(role['terminals'].get_text(), role['optional'].get_active()))
+            if role['optional'].get_active():
+                roles[role_id]['optional'] = True
         for test in self.tests:
             key = identifier(test['name'].get_text())
             if key in tests:
                 raise ValueError('Choose distinct test names.')
             buffer = test['description'].get_buffer()
-            tests[key] = dict(description=buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False),
-                              procedure=test['procedure'].get_active_id())
+            description = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False).strip()
+            buffer = test['specification'].get_buffer()
+            specification = json.loads(buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False))
+            if not isinstance(specification, dict):
+                raise ValueError('A test specification must be a JSON object')
+            if description:
+                specification['description'] = description
+            tests[key] = specification
         return validate_definition(dict(id=self.identity, name=self.name.get_text().strip(),
             description=self.description.get_text().strip(),
             dut=dict(name=self.dut_name.get_text().strip(), terminals=terminals(self.dut_terminals.get_text())),

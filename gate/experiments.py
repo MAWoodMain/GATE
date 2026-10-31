@@ -1,7 +1,8 @@
 """Model-independent experiment definitions; checking a setup performs no I/O."""
 import copy
 import re
-from gate.procedures import PROCEDURES
+from gate.procedures import test_spec, load_template
+from gate.test_spec import validate_test
 
 
 def _text(value, label):
@@ -34,8 +35,10 @@ def validate_definition(value):
     for identity, component in [('dut', dut), *roles.items()]:
         _identifier(identity)
         if identity != 'dut':
-            if not isinstance(component, dict) or set(component) != {'name', 'capabilities', 'terminals'}:
+            if not isinstance(component, dict) or {'name', 'capabilities', 'terminals'} - set(component) or set(component) - {'name', 'capabilities', 'terminals', 'optional'}:
                 raise ValueError('Each role requires name, capabilities and terminals')
+            if type(component.get('optional', False)) is not bool:
+                raise ValueError('Role optional must be a boolean')
             _text(component['name'], 'Role name')
             capabilities = component['capabilities']
             if not isinstance(capabilities, list) or not capabilities:
@@ -45,7 +48,7 @@ def validate_definition(value):
             if len(set(capabilities)) != len(capabilities):
                 raise ValueError('Duplicate capability')
         terminals = component['terminals']
-        if not isinstance(terminals, list) or not terminals:
+        if not isinstance(terminals, list) or not terminals and (identity == 'dut' or not component.get('optional', False)):
             raise ValueError('Each component requires terminals')
         for terminal in terminals:
             _identifier(terminal)
@@ -68,15 +71,14 @@ def validate_definition(value):
     tests = value['tests']
     if not isinstance(tests, dict) or not tests:
         raise ValueError('Provide named test descriptions')
+    normalized = copy.deepcopy(value)
     for identity, description in tests.items():
         _identifier(identity)
-        if isinstance(description, dict):
-            if set(description) != {'description', 'procedure'} or not isinstance(description['procedure'], str) or description['procedure'] not in PROCEDURES:
-                raise ValueError('Test requires description and a supported procedure')
-            _text(description['description'], 'Test description')
-        else:
+        if isinstance(description, str):
             _text(description, 'Test description')
-    return copy.deepcopy(value)
+        spec, _ = validate_test(test_spec(value, identity), roles)
+        normalized['tests'][identity] = spec
+    return normalized
 
 
 def check_bindings(definition, bindings, instruments, resolve):
@@ -88,20 +90,28 @@ def check_bindings(definition, bindings, instruments, resolve):
     for role, requirement in definition['roles'].items():
         key = bindings.get(role)
         if key is None:
+            if requirement.get('optional', False):
+                continue
             errors.append(f'{role}: no instrument assigned')
             continue
         if not isinstance(key, str):
             raise ValueError('Binding instrument IDs must be strings')
         key = resolve(key)
-        resolved[role] = key
         instrument = instruments.get(key)
         if instrument is None:
+            if requirement.get('optional', False):
+                continue
             errors.append(f'{role}: instrument is not connected')
             continue
+        resolved[role] = key
         missing = set(requirement['capabilities']) - set(getattr(instrument, 'experiment_capabilities', ()))
         if missing:
+            if requirement.get('optional', False):
+                resolved.pop(role, None)
+                continue
             errors.append(f'{role}: missing capabilities: {", ".join(sorted(missing))}')
-    if len(set(resolved.values())) != len(resolved):
+    mandatory = [identity for role, identity in resolved.items() if not definition['roles'][role].get('optional', False)]
+    if len(set(mandatory)) != len(mandatory):
         errors.append('Equipment roles require distinct instruments')
     return dict(experiment=definition['id'], bindings=resolved, compatible=not errors, errors=errors)
 
@@ -122,7 +132,18 @@ BUCK_CONVERTER = validate_definition({
         ['load.positive', 'dut.output_positive'], ['load.negative', 'dut.output_negative'],
     ],
     'tests': {
-        'efficiency': 'Sweep input voltage and output load current. Measure input and output voltage/current; efficiency = (Vout * Iout) / (Vin * Iin). Exclude invalid readings and zero input power.',
-        'maximum_output_current': 'At each input voltage, increase load current within DUT and equipment limits until a defined regulation or protection threshold is reached; record the last acceptable output current. Thresholds, limits and settling must be specified before execution.',
+        'efficiency': load_template('efficiency'),
+        'maximum_output_current': load_template('maximum_output_current'),
     },
 })
+
+
+# Optional probes extend existing arrangements without changing their core wiring.
+BUCK_CONVERTER['roles'].update({
+    'thermal': dict(name='Temperature probes', capabilities=['measure.temperature'], terminals=[], optional=True),
+    'scope': dict(name='Waveform recorder', capabilities=['capture.waveform'], terminals=[], optional=True),
+})
+from gate.secondary import add_converter_secondary
+for _test_id, _test in BUCK_CONVERTER['tests'].items():
+    add_converter_secondary(_test, _test_id)
+BUCK_CONVERTER = validate_definition(BUCK_CONVERTER)

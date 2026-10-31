@@ -1,0 +1,914 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:gate:test:v1",
+  "title": "GATE declarative experiment test, version 1",
+  "description": "Structural schema. GATE additionally validates references, expression syntax, dependencies, grids, driver limits and role bindings.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "unit": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "default": {
+            "type": "number"
+          },
+          "min": {
+            "type": "number"
+          },
+          "max": {
+            "type": "number"
+          },
+          "step": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "type": {
+            "enum": [
+              "number",
+              "integer"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "unit",
+          "default",
+          "min",
+          "max",
+          "step",
+          "type"
+        ],
+        "additionalProperties": false
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "maxProperties": 32,
+      "minProperties": 0
+    },
+    "axes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "unit": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "role": {
+            "$ref": "#/$defs/identifier"
+          },
+          "control": {
+            "enum": [
+              "voltage",
+              "current",
+              "current_limit"
+            ]
+          },
+          "start": {
+            "$ref": "#/$defs/expression"
+          },
+          "stop": {
+            "$ref": "#/$defs/expression"
+          },
+          "step": {
+            "$ref": "#/$defs/expression"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/expression"
+            },
+            "minItems": 1,
+            "maxItems": 1000
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "unit"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "values"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "start"
+                  ]
+                },
+                {
+                  "required": [
+                    "stop"
+                  ]
+                },
+                {
+                  "required": [
+                    "step"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "required": [
+              "start",
+              "stop",
+              "step"
+            ],
+            "not": {
+              "required": [
+                "values"
+              ]
+            }
+          }
+        ],
+        "dependentRequired": {
+          "role": [
+            "control"
+          ],
+          "control": [
+            "role"
+          ]
+        }
+      },
+      "minItems": 0,
+      "maxItems": 4
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/identifier"
+      },
+      "minItems": 0,
+      "maxItems": 32,
+      "uniqueItems": true
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "voltage": {
+            "$ref": "#/$defs/expression"
+          },
+          "current": {
+            "$ref": "#/$defs/expression"
+          }
+        },
+        "required": [
+          "voltage",
+          "current"
+        ],
+        "additionalProperties": false
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "maxProperties": 32,
+      "minProperties": 0
+    },
+    "setup": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/operation"
+      },
+      "minItems": 0,
+      "maxItems": 32
+    },
+    "before_point": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/operation"
+      },
+      "minItems": 0,
+      "maxItems": 32
+    },
+    "acquisition": {
+      "type": "object",
+      "properties": {
+        "settle_s": {
+          "$ref": "#/$defs/expression"
+        },
+        "samples": {
+          "$ref": "#/$defs/expression"
+        },
+        "repeat": {
+          "$ref": "#/$defs/expression"
+        },
+        "capture_all": {
+          "type": "boolean"
+        },
+        "on_invalid": {
+          "enum": [
+            "fail",
+            "record"
+          ]
+        }
+      },
+      "required": [
+        "settle_s",
+        "samples",
+        "repeat",
+        "capture_all",
+        "on_invalid"
+      ],
+      "additionalProperties": false
+    },
+    "measurements": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "unit": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "role": {
+            "$ref": "#/$defs/identifier"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "quantity": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "channel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "required": [
+          "label",
+          "unit",
+          "role",
+          "required"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "quantity"
+            ],
+            "not": {
+              "required": [
+                "channel"
+              ]
+            }
+          },
+          {
+            "required": [
+              "channel"
+            ],
+            "not": {
+              "required": [
+                "quantity"
+              ]
+            }
+          }
+        ]
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "maxProperties": 64,
+      "minProperties": 0
+    },
+    "derived": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "unit": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "expression": {
+            "$ref": "#/$defs/expression"
+          },
+          "aggregate": {
+            "enum": [
+              "point",
+              "sample_mean"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "unit",
+          "expression",
+          "aggregate"
+        ],
+        "additionalProperties": false
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "maxProperties": 64,
+      "minProperties": 0
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "stage": {
+            "enum": [
+              "sample",
+              "point",
+              "continuous"
+            ]
+          },
+          "expression": {
+            "$ref": "#/$defs/expression"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "stage",
+          "expression",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 32
+    },
+    "stop_when": {
+      "type": "object",
+      "properties": {
+        "expression": {
+          "$ref": "#/$defs/expression"
+        },
+        "scope": {
+          "enum": [
+            "group",
+            "run"
+          ]
+        }
+      },
+      "required": [
+        "expression",
+        "scope"
+      ],
+      "additionalProperties": false
+    },
+    "reduce": {
+      "type": "object",
+      "properties": {
+        "group_by": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "minItems": 0,
+          "maxItems": 4
+        },
+        "where": {
+          "$ref": "#/$defs/expression"
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "unit": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "expression": {
+                "$ref": "#/$defs/expression"
+              },
+              "reducer": {
+                "enum": [
+                  "last",
+                  "first",
+                  "min",
+                  "max",
+                  "mean",
+                  "count"
+                ]
+              }
+            },
+            "required": [
+              "label",
+              "unit",
+              "expression",
+              "reducer"
+            ],
+            "additionalProperties": false
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/identifier"
+          },
+          "maxProperties": 64,
+          "minProperties": 1
+        },
+        "status": {
+          "type": "object",
+          "properties": {
+            "field": {
+              "$ref": "#/$defs/identifier"
+            },
+            "stopped": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "exhausted": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          },
+          "required": [
+            "field",
+            "stopped",
+            "exhausted"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "group_by",
+        "where",
+        "metrics"
+      ],
+      "additionalProperties": false
+    },
+    "plots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "line",
+              "scatter"
+            ]
+          },
+          "data": {
+            "enum": [
+              "points",
+              "summary",
+              "secondary"
+            ]
+          },
+          "x": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "y": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "series": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "x_label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "y_label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "x_scale": {
+            "enum": [
+              "linear",
+              "log"
+            ]
+          },
+          "y_scale": {
+            "enum": [
+              "linear",
+              "log"
+            ]
+          },
+          "markers": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "styles": {
+                "type": "object",
+                "maxProperties": 16,
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "shape": {
+                      "enum": [
+                        "circle",
+                        "triangle",
+                        "square"
+                      ]
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 160
+                    }
+                  },
+                  "required": [
+                    "shape",
+                    "label"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "field",
+              "styles"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "kind",
+          "data",
+          "x",
+          "y",
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 32
+    },
+    "table": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "enum": [
+            "points",
+            "summary"
+          ]
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "minItems": 1,
+          "maxItems": 128
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      },
+      "minItems": 0,
+      "maxItems": 8
+    },
+    "secondary_measurements": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "unit": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "role": {
+            "$ref": "#/$defs/identifier"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "quantity": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "channel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "kind": {
+            "enum": [
+              "scalar",
+              "temperature"
+            ]
+          },
+          "location": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "required": [
+          "label",
+          "unit",
+          "role",
+          "required"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "quantity"
+            ],
+            "not": {
+              "required": [
+                "channel"
+              ]
+            }
+          },
+          {
+            "required": [
+              "channel"
+            ],
+            "not": {
+              "required": [
+                "quantity"
+              ]
+            }
+          }
+        ]
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "maxProperties": 32,
+      "minProperties": 0
+    },
+    "waveforms": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "maxProperties": 8,
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "unit": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "role": {
+            "$ref": "#/$defs/identifier"
+          },
+          "channel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "phase": {
+            "enum": [
+              "settled",
+              "transition"
+            ]
+          },
+          "when": {
+            "$ref": "#/$defs/expression"
+          },
+          "points": {
+            "$ref": "#/$defs/expression"
+          },
+          "window_s": {
+            "$ref": "#/$defs/expression"
+          },
+          "pretrigger": {
+            "$ref": "#/$defs/expression"
+          },
+          "timeout_s": {
+            "$ref": "#/$defs/expression"
+          },
+          "max_captures": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
+          },
+          "trigger": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "level": {
+                    "$ref": "#/$defs/expression"
+                  },
+                  "slope": {
+                    "enum": [
+                      "rising",
+                      "falling"
+                    ]
+                  }
+                },
+                "required": [
+                  "level",
+                  "slope"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "screenshot": {
+            "type": "boolean",
+            "description": "Save a scope screen image; defaults true for transition captures."
+          }
+        },
+        "required": [
+          "label",
+          "unit",
+          "role",
+          "channel",
+          "required",
+          "phase",
+          "when",
+          "points",
+          "window_s",
+          "pretrigger",
+          "timeout_s",
+          "max_captures",
+          "trigger"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "label",
+    "description",
+    "parameters",
+    "axes",
+    "outputs",
+    "limits",
+    "setup",
+    "before_point",
+    "acquisition",
+    "measurements",
+    "derived",
+    "checks",
+    "plots",
+    "table"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "not": {
+        "enum": [
+          "abs",
+          "min",
+          "max",
+          "sqrt",
+          "log",
+          "log10",
+          "coalesce",
+          "is_valid"
+        ]
+      }
+    },
+    "expression": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      ]
+    },
+    "operation": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/identifier"
+        },
+        "control": {
+          "enum": [
+            "voltage",
+            "current",
+            "current_limit"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/expression"
+        }
+      },
+      "required": [
+        "role",
+        "control",
+        "value"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

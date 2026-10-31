@@ -11,7 +11,6 @@ from gate.connections import communication_type, validate_resource
 from gate.service import BUS, PATH
 from gate.resources import documentation
 from gate.experiments import BUCK_CONVERTER
-from gate.procedures import test_spec
 
 # Keep the desktop's light/dark theme and Ubuntu accent colours.
 CSS = b'''
@@ -199,30 +198,6 @@ class Window(Gtk.ApplicationWindow):
         view = ExperimentView(self, definition)
         content.append(view)
         self.experiment_views[definition['id']] = view
-        _, dut_rows = self.section('Device Under Test', 'The equipment is arranged around this device.', content)
-        dut_rows.append(self.setting_row(definition['dut']['name'],
-            self.label('Terminals: ' + ', '.join(terminal.replace('_', ' ') for terminal in definition['dut']['terminals']), 'dim-label')))
-        _, roles = self.section('Equipment', 'Required functions, independent of instrument make or model.', content)
-        capability_names = {
-            'source.dc_voltage': 'Variable DC voltage source',
-            'sink.dc_current': 'DC current load',
-            'measure.dc_voltage': 'DC voltage measurement',
-            'measure.dc_current': 'DC current measurement',
-        }
-        for requirement in definition['roles'].values():
-            roles.append(self.setting_row(requirement['name'], self.label(
-                '\n'.join(capability_names.get(item, item.replace('.', ' · ').replace('_', ' '))
-                          for item in requirement['capabilities']), 'dim-label')))
-        _, wiring = self.section('Wiring', 'Connections between equipment and the device under test.', content)
-        names = {'dut': definition['dut']['name'], **{key: role['name'] for key, role in definition['roles'].items()}}
-        def endpoint(value):
-            component, terminal = value.split('.', 1)
-            return names[component] + ' · ' + terminal.replace('_', ' ')
-        for source, destination in definition['connections']:
-            wiring.append(self.setting_row(endpoint(source), self.label('→ ' + endpoint(destination), 'dim-label')))
-        _, tests = self.section('Tests', 'Tests that share this equipment arrangement.', content)
-        for identity in definition['tests']:
-            tests.append(self.setting_row(identity.replace('_', ' ').capitalize(), self.label(test_spec(definition, identity)['description'], 'dim-label')))
         return scroll
 
     def render_experiments(self, definitions):
