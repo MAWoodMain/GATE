@@ -73,6 +73,8 @@ try:
                 raise AssertionError('Stale wiring must be rejected')
             editor.load_example()
             editor.name.set_text('Created in desktop smoke test')
+            builder = editor.tests[0]['builder']
+            builder.forms['Testing'].children['label'][1].entry.set_text('Efficiency built in GUI')
             extra = editor.add_role()
             extra['box'].get_first_child().emit('clicked')
             extra = editor.add_test('Temporary', 'Temporary procedure')
@@ -120,6 +122,7 @@ try:
             assert {key for key, role in definition['roles'].items() if not role.get('optional', False)} == {'supply', 'load'}
             assert definition['roles']['thermal']['optional'] and not definition['roles']['thermal']['terminals']
             assert len(definition['tests']) == 2
+            assert definition['tests']['efficiency']['label'] == 'Efficiency built in GUI'
             cancelled = window.new_experiment()
             dialogs.append(cancelled)
             cancelled.response(Gtk.ResponseType.CANCEL)

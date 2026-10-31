@@ -67,7 +67,7 @@ with tempfile.TemporaryDirectory() as folder:
                     dialog = view.edit_specification()
                     dialogs.append(dialog)
                     content = dialog.get_content_area()
-                    editor = content.get_first_child().get_next_sibling().get_child()
+                    editor = dialog.builder.raw
                     editor.get_buffer().set_text('{invalid JSON')
                     dialog.response(Gtk.ResponseType.ACCEPT)
                     assert content.get_last_child().get_text()
@@ -76,12 +76,17 @@ with tempfile.TemporaryDirectory() as folder:
                     spec['derived']['scaled_output_v'] = dict(label='Scaled output', unit='V', expression='output_voltage_v * calibration_factor', aggregate='point')
                     spec['plots'].append(dict(kind='scatter', data='points', x='output_current_a', y='scaled_output_v', title='Scaled output'))
                     editor.get_buffer().set_text(json.dumps(spec))
+                    dialog.builder.load_json()
+                    # Edit a result title through the visualization form before saving.
+                    plots = dialog.builder.forms['Output visualization'].children['plots'][1]
+                    plots.rows[-1][2].children['title'][1].entry.set_text('Scaled output from builder')
                     dialog.response(Gtk.ResponseType.ACCEPT)
                     phase = 'spec_saved'
                 elif phase == 'spec_saved':
                     if 'calibration_factor' not in view.parameters:
                         return True
                     assert view.parameters['calibration_factor'].get_value() == 1.
+                    assert view.current_spec()['plots'][-1]['title'] == 'Scaled output from builder'
                     view.parameters['input_start_v'].set_value(9.)
                     dialog = view.add_secondary_measurements()
                     dialogs.append(dialog)
@@ -118,6 +123,10 @@ with tempfile.TemporaryDirectory() as folder:
                     assert view.parameters['input_start_v'].get_value() == 8.
                     view.test_checks['maximum_output_current'].set_active(True)
                     assert not view.start.get_sensitive(), 'Output sweeps require wiring confirmation'
+                    # A developer bench may also have physical observation equipment.
+                    # Select the demo observers explicitly for this simulated run.
+                    view.pickers['scope'].set_active_id('demo:waveforms')
+                    view.pickers['thermal'].set_active_id('demo:temperatures')
                     view.tabs.set_current_page(view.tabs.page_num(view.run_page))
                     assert 'SIMULATED' in view.run_selection.get_text()
                     view.wiring.set_active(True)

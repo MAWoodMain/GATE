@@ -1,7 +1,7 @@
 """GNOME settings-style setup, progress and results for an experiment."""
 import shutil
 import copy
-import json
+from gate.test_builder import TestBuilder
 from pathlib import Path
 import gi
 gi.require_version('Gtk', '4.0')
@@ -69,7 +69,7 @@ class ExperimentView(Gtk.Box):
             self.test_picker.append(identity, identity.replace('_', ' ').capitalize() + ' · ' + spec['label'])
         self.test_picker.set_active(0)
         settings.append(owner.setting_row('Test', self.test_picker))
-        self.edit_spec_button = owner.button('Edit Test JSON…', self.edit_specification)
+        self.edit_spec_button = owner.button('Edit Test…', self.edit_specification)
         self.edit_spec_button.set_halign(Gtk.Align.START)
         self.parameter_page.append(self.edit_spec_button)
         self.parameter_rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, show_separators=True)
@@ -228,19 +228,16 @@ class ExperimentView(Gtk.Box):
 
     def edit_specification(self):
         identity = self.test_picker.get_active_id()
-        dialog = Gtk.Dialog(title='Edit Test JSON', transient_for=self.owner, modal=True,
+        dialog = Gtk.Dialog(title='Test Builder', transient_for=self.owner, modal=True,
                             default_width=820, default_height=720, use_header_bar=True)
         dialog.add_button('Cancel', Gtk.ResponseType.CANCEL)
         save = dialog.add_button('Save', Gtk.ResponseType.ACCEPT)
         save.add_css_class('suggested-action')
         content = dialog.get_content_area()
         content.set_spacing(12)
-        content.append(self.owner.label('Define parameters, sweeps, metrics, calculations and plots using test schema version 1.', 'dim-label'))
-        editor = Gtk.TextView(monospace=True, wrap_mode=Gtk.WrapMode.NONE, left_margin=12, right_margin=12, top_margin=12)
-        editor.get_buffer().set_text(json.dumps(self.current_spec(), indent=2))
-        scroll = Gtk.ScrolledWindow(vexpand=True)
-        scroll.set_child(editor)
-        content.append(scroll)
+        editor = TestBuilder(self.current_spec(), self.definition['roles'])
+        content.append(editor)
+        dialog.builder = editor
         error = self.owner.label('', 'error')
         content.append(error)
         busy = False
@@ -252,8 +249,7 @@ class ExperimentView(Gtk.Box):
                 dialog.destroy()
                 return
             try:
-                buffer = editor.get_buffer()
-                spec, _ = validate_test(json.loads(buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False)), self.definition['roles'])
+                spec, _ = validate_test(editor.get_spec(), self.definition['roles'])
                 definition = copy.deepcopy(self.definition)
                 definition['tests'][identity] = spec
             except (ValueError, TypeError) as exc:
@@ -261,6 +257,8 @@ class ExperimentView(Gtk.Box):
                 return
             busy = True
             save.set_sensitive(False)
+            editor.set_sensitive(False)
+            dialog.get_widget_for_response(Gtk.ResponseType.CANCEL).set_sensitive(False)
             error.set_text('Saving…')
             def completed(result):
                 nonlocal busy
@@ -268,6 +266,8 @@ class ExperimentView(Gtk.Box):
                 if result['state'] == 'failed':
                     error.set_text(result.get('error', 'Unable to save specification'))
                     save.set_sensitive(True)
+                    editor.set_sensitive(True)
+                    dialog.get_widget_for_response(Gtk.ResponseType.CANCEL).set_sensitive(True)
                 else:
                     view = self.owner.experiment_views.get(definition['id'])
                     if view:
@@ -527,7 +527,7 @@ class ExperimentView(Gtk.Box):
         content.set_spacing(14)
         for setter in (content.set_margin_top, content.set_margin_bottom, content.set_margin_start, content.set_margin_end):
             setter(20)
-        content.append(self.owner.label('Optional observations enrich the selected test. Unassigned probes are recorded as unavailable; required observations can be configured in Edit Test JSON.', 'dim-label'))
+        content.append(self.owner.label('Optional observations enrich the selected test. Unassigned probes are recorded as unavailable; required observations can be configured in Edit Test → Advanced JSON.', 'dim-label'))
         choices = {}
         for key, label, active in [('dut','DUT temperature',True), ('ambient','Ambient temperature',True),
                                    ('ripple','Ripple waveform after settling',True), ('protection','Protection waveform armed before a transition',False)]:
