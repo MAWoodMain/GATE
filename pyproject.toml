@@ -11,6 +11,7 @@ license = {file = "LICENSE"}
 gate = "gate.__main__:main"
 [project.entry-points."gate.drivers"]
 siglent_sds = "gate.drivers.siglent:SiglentSDS"
+keysight344xxa = "gate.drivers.keysight344xxa:Keysight344xxA"
 fluke45 = "gate.drivers.fluke45:Fluke45"
 hantek365 = "gate.drivers.hantek365:Hantek365"
 [tool.setuptools.packages.find]

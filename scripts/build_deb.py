@@ -74,6 +74,7 @@ def build(version,output,work=None):
         for source in sorted((ROOT/'extension').iterdir()):
             if source.is_file():copy(str(source.relative_to(ROOT)),'usr/share/gnome-shell/extensions/gate@mawoodmain.github.io/'+source.name)
         copy('data/70-gate-siglent.rules','usr/lib/udev/rules.d/70-gate-siglent.rules')
+        copy('data/70-gate-keysight.rules','usr/lib/udev/rules.d/70-gate-keysight.rules')
         copy('data/70-gate-hantek.rules','usr/lib/udev/rules.d/70-gate-hantek.rules')
         unit=(ROOT/'data/gate.service').read_text().replace('ExecStart=%h/.local/bin/gate service','ExecStart=/usr/bin/gate service')
         write('usr/lib/systemd/user/gate.service',unit)

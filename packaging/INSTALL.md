@@ -15,7 +15,7 @@ Use apt rather than `dpkg -i` so dependencies are resolved. The package installs
 - `/usr/bin/gate` and public Python modules for the agent client.
 - `/usr/lib/systemd/user/gate.service`.
 - The desktop entry and GNOME extension under `/usr/share`.
-- Siglent and Hantek USB access rules under `/usr/lib/udev/rules.d`.
+- Siglent, Hantek and Keysight/Agilent USB access rules under `/usr/lib/udev/rules.d`.
 - This guide and the full agent guide under `/usr/share/doc/gate-ate`.
 
 Start GATE for your user:
