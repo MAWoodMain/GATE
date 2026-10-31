@@ -42,6 +42,30 @@ try:
         try:
             assert len(window.labels)==3, window.status.get_text()
             assert window.get_title() == 'GATE · Devices & Settings'
+            from gate.experiments import BUCK_CONVERTER
+            import copy
+            assert window.pages.get_visible_child_name() == 'devices'
+            experiment_row = window.experiment_rows['buck_converter']
+            assert experiment_row.get_header().get_text() == 'Experiments'
+            window.navigation.select_row(experiment_row)
+            assert window.pages.get_visible_child_name() == 'experiment:buck_converter'
+            assert window.page_title.get_text() == BUCK_CONVERTER['name']
+            page = window.experiment_pages['buck_converter']
+            window.render_experiments({'buck_converter': BUCK_CONVERTER})
+            assert window.experiment_pages['buck_converter'] is page
+            assert window.navigation.get_selected_row() is experiment_row
+            updated = copy.deepcopy(BUCK_CONVERTER)
+            updated['name'] = 'Updated converter'
+            second = copy.deepcopy(BUCK_CONVERTER)
+            second['id'], second['name'] = 'second', 'Second experiment'
+            window.render_experiments({'buck_converter': updated, 'second': second})
+            assert len(window.experiment_rows) == 2
+            assert window.page_title.get_text() == 'Updated converter'
+            assert window.pages.get_visible_child_name() == 'experiment:buck_converter'
+            window.render_experiments({'second': second})
+            assert window.pages.get_visible_child_name() == 'devices'
+            window.render_experiments({'buck_converter': BUCK_CONVERTER})
+            window.navigation.select_row(window.devices_navigation)
             assert all('Connected' in label.get_text() or 'Demo' in label.get_text() for label in window.labels.values())
             assert not hasattr(window, 'voltage'), 'Measurement/output controls belong outside device manager'
             # Exercise missing-device sections, structured editor and service actions without touching hardware.
@@ -146,7 +170,7 @@ try:
             window.render_devices(fixture)
             window.update_sensitivity()
             window.notify('')
-            print('PASS: D-Bus recording, device icons/toggle, settings tabs/copy, scoped forget, service controls')
+            print('PASS: sidebar navigation and experiment updates, D-Bus recording, device icons/toggle, settings tabs/copy, scoped forget, service controls')
         except Exception as exc:
             errors.append(exc)
         finally:

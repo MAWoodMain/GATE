@@ -24,6 +24,7 @@ def parse_measurement(response, parameter, unit):
 class SiglentSDS:
     device_type = 'SIGLENT:SDS1202X-E'
     category = "oscilloscope"
+    experiment_capabilities = ('measure.scalar',)
     simulated = False
     @staticmethod
     def matches(identity):

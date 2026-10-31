@@ -12,12 +12,14 @@ from pathlib import Path
 from gate import discovery
 from gate.connections import validate_resource
 from gate.identity import identify, migrate
-from gate.drivers.simulated import Simulated
+from gate.drivers.simulated import Simulated, ConverterBench
 from gate.model import Reading, MeasurementFunction
 from gate.storage import Recorder
+from gate.experiments import BUCK_CONVERTER, validate_definition, check_bindings
+from gate.experiment_runs import ExperimentRun, data_directory, history
 
 class Engine:
-    def __init__(self, interval=None, profile_path=None):
+    def __init__(self, interval=None, profile_path=None, experiment_directory=None):
         self.profile_path = Path(profile_path) if profile_path else None
         profile = {}
         if self.profile_path and self.profile_path.exists():
@@ -27,6 +29,10 @@ class Engine:
         self.saved_devices = profile.get("devices", {})
         self.instrument_profiles = profile['instrument_profiles']
         self.connections = profile['connections']
+        self.experiments = {key: validate_definition(value) for key, value in
+                            profile.get('experiments', {'buck_converter': BUCK_CONVERTER}).items()}
+        if any(key != value['id'] for key, value in self.experiments.items()):
+            raise ValueError('Experiment storage key must match its ID')
         self.active_resources = {}
         if interval is None:
             interval = float(profile.get("interval", 1.0))
@@ -35,6 +41,9 @@ class Engine:
         self.interval = interval
         self.instruments = {}
         self.sweeps = {}
+        self.experiment_directory = Path(experiment_directory) if experiment_directory else data_directory()
+        self.experiment_run = None
+        self.experiment_history = history(self.experiment_directory)
         self.recorder = None
         self.origin = time.monotonic_ns()
         self.utc = time.time_ns()
@@ -43,7 +52,7 @@ class Engine:
         self.stop_event = threading.Event()
         self.wake_event = threading.Event()
         self.lock = threading.Lock()
-        self.state = dict(instruments=[], recording=False, log_path="", tick=0,
+        self.state = dict(experiment_run=None, experiment_runs=copy.deepcopy(self.experiment_history), experiment_execution_version=1, experiments=copy.deepcopy(self.experiments), instruments=[], recording=False, log_path="", tick=0,
                           interval_s=self.interval, configured_resources=sorted(self.saved_resources), saved_devices=copy.deepcopy(self.saved_devices), instrument_profiles=copy.deepcopy(self.instrument_profiles), connections=copy.deepcopy(self.connections), controls={}, commands={}, status="Ready", inventory=discovery.usb_inventory(), demo=False)
         self.thread = None
     def submit(self, action, **args):
@@ -125,6 +134,7 @@ class Engine:
             self.state['connections'] = copy.deepcopy(self.connections)
             self.state['instrument_profiles'] = copy.deepcopy(self.instrument_profiles)
             self.state['interval_s'] = self.interval
+            self.state['experiments'] = copy.deepcopy(self.experiments)
             cards = {card['id']: card for card in self.state['instruments'] if card['id'] in self.instruments}
             for key, resource in self.active_resources.items():
                 instrument = self.instruments[key]
@@ -133,6 +143,9 @@ class Engine:
                     simulated=instrument.simulated, readings=[], error='', sweep=False,
                     functions=[asdict(item) for item in self.functions(instrument)],
                     current_function=getattr(instrument, 'current_function', None), read_duration_ms=0))
+                card['experiment_capabilities'] = list(getattr(instrument, 'experiment_capabilities', ()))
+                card['experiment_control_supported'] = bool(getattr(instrument, 'experiment_control_supported', False))
+                card['experiment_limits'] = copy.deepcopy(getattr(instrument, 'experiment_limits', {}))
                 card.update(name=profile['name'] or instrument.name, custom_name=profile['name'], resource=resource, instrument_id=key,
                             device_type=profile['type'], serial=profile['serial'], settings=copy.deepcopy(profile['settings']))
             self.state['instruments'] = list(cards.values())
@@ -143,7 +156,8 @@ class Engine:
             with os.fdopen(fd, 'w') as stream:
                 json.dump(dict(schema_version=2, resources=sorted(self.saved_resources),
                     devices=self.saved_devices, connections=self.connections,
-                    instrument_profiles=self.instrument_profiles, interval=self.interval), stream)
+                    instrument_profiles=self.instrument_profiles, interval=self.interval,
+                    experiments=self.experiments), stream)
             os.replace(temporary, self.profile_path)
 
     def function_group(self, function):
@@ -253,8 +267,61 @@ class Engine:
         self.save_profile()
         return dict(instrument=key, resource=address)
 
+    def publish_experiment(self):
+        if self.experiment_run:
+            metadata = copy.deepcopy(self.experiment_run.metadata)
+            if not self.experiment_run.active:
+                self.experiment_history = [metadata] + [item for item in self.experiment_history if item['id'] != metadata['id']][:19]
+            with self.lock:
+                self.state['experiment_run'] = metadata
+                self.state['experiment_runs'] = copy.deepcopy(self.experiment_history)
+
     def command(self, action, args):
-        if action == "demo":
+        if self.experiment_run and self.experiment_run.active:
+            if action in ('disconnect', 'forget', 'edit_device'):
+                self.experiment_run.finish('cancelled', 'Equipment configuration changed')
+                self.publish_experiment()
+            elif action in ('settings', 'scan', 'connect', 'query', 'write', 'static', 'sweep', 'output',
+                            'cancel_sweep', 'select_function', 'display_measurements', 'instrument_settings',
+                            'copy_settings', 'start_experiment', 'demo_experiment'):
+                raise ValueError('Stop the active experiment before changing equipment or acquisition settings')
+        if action == 'start_experiment':
+            definition = self.experiments[args['experiment']]
+            if self.sweeps:
+                raise ValueError('Cancel instrument sweeps before starting an experiment')
+            self.experiment_run = ExperimentRun(definition, args['test'], args.get('bindings', {}),
+                args.get('parameters', {}), self.instruments, self.resolve, self.interval, self.experiment_directory,
+                args.get('enable_outputs', False), args.get('wiring_confirmed', False))
+            self.publish_experiment()
+            return copy.deepcopy(self.experiment_run.metadata)
+        elif action == 'cancel_experiment':
+            if self.experiment_run and self.experiment_run.active:
+                self.experiment_run.finish('cancelled', 'Stopped by user')
+                self.publish_experiment()
+            return copy.deepcopy(self.experiment_run.metadata) if self.experiment_run else None
+        elif action == 'demo_experiment':
+            if not all(key in self.instruments for key in ('demo:converter_supply', 'demo:electronic_load')):
+                for key in ('demo:converter_supply', 'demo:electronic_load'):
+                    previous = self.instruments.pop(key, None)
+                    if previous:
+                        previous.close()
+                bench = ConverterBench()
+                for device in (bench.supply, bench.load):
+                    self.instruments[device.id] = device
+            self._status('Simulated converter supply and load are available')
+            return dict(instruments=['demo:converter_supply', 'demo:electronic_load'])
+        elif action == 'save_experiment':
+            definition = validate_definition(args['experiment'])
+            self.experiments[definition['id']] = definition
+            self.save_profile()
+            return copy.deepcopy(definition)
+        elif action == 'delete_experiment':
+            del self.experiments[args['experiment']]
+            self.save_profile()
+        elif action == 'check_experiment':
+            return check_bindings(self.experiments[args['experiment']], args.get('bindings', {}),
+                                  self.instruments, self.resolve)
+        elif action == "demo":
             for category in ("multimeter", "power_supply", "oscilloscope"):
                 key = "demo:" + category
                 if key not in self.instruments:
@@ -506,8 +573,10 @@ class Engine:
                 for reading in readings]
 
     def cycle(self):
-        tick_ns = time.monotonic_ns() - self.origin
+        cycle_ns = time.monotonic_ns()
+        tick_ns = cycle_ns - self.origin
         cards = []
+        batches = {}
         for key, instrument in list(self.instruments.items()):
             start = time.monotonic_ns() - self.origin
             error = ""
@@ -529,6 +598,7 @@ class Engine:
                 self._status(f"{instrument.name}: {error}")
                 readings = [Reading("connection", None, "", "error")]
             end = time.monotonic_ns() - self.origin
+            batches[key] = dict(readings=readings, error=error, start_ns=start+self.origin, end_ns=end+self.origin)
             if self.recorder:
                 for reading in readings:
                     self.recorder.sample(self.tick, tick_ns, key, reading, start, end)
@@ -538,6 +608,9 @@ class Engine:
                               device_type=profile.get('type'), serial=profile.get('serial'),
                               settings=copy.deepcopy(profile.get('settings', {})), category=instrument.category,
                               simulated=instrument.simulated, readings=[asdict(r) for r in readings],
+                              experiment_capabilities=list(getattr(instrument, 'experiment_capabilities', ())),
+                              experiment_control_supported=bool(getattr(instrument, 'experiment_control_supported', False)),
+                              experiment_limits=copy.deepcopy(getattr(instrument, 'experiment_limits', {})),
                               error=error, sweep=key in self.sweeps,
                               functions=[asdict(function) for function in self.functions(instrument, readings)],
                               current_function=getattr(instrument, "current_function", None),
@@ -547,6 +620,9 @@ class Engine:
                 self.sweeps.pop(key, None)
                 del self.instruments[key]
                 self.active_resources.pop(key, None)
+        if self.experiment_run and self.experiment_run.active:
+            self.experiment_run.advance(batches, cycle_ns)
+            self.publish_experiment()
         if self.recorder:
             self.recorder.flush()
         with self.lock:
@@ -582,6 +658,9 @@ class Engine:
         except Exception as exc:
             self._status(f"Acquisition stopped: {exc}")
         finally:
+            if self.experiment_run and self.experiment_run.active:
+                self.experiment_run.finish('cancelled', 'Service stopped')
+                self.publish_experiment()
             if self.recorder:
                 self.recorder.close()
             for instrument in self.instruments.values():

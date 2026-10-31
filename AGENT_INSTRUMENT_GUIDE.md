@@ -40,6 +40,8 @@ Every request requires `Authorization: Bearer <token>`. POST bodies require `Con
 |---|---|
 | `GET /v1/health` | API/application versions, raw-command setting, supported actions |
 | `GET /v1/state` | Complete cached acquisition state, command results, settings and recording status |
+| `GET /v1/experiment-runs` | Current/latest run, progress, retained results and output paths |
+| `GET /v1/experiments` | Saved model-independent equipment/DUT arrangements and test descriptions |
 | `GET /v1/instruments` | Instrument identities, readings and driver capabilities |
 | `GET /v1/instruments/<encoded-id>` | One instrument; percent-encode the entire ID including slashes |
 | `POST /v1/commands` | Submit an action; returns HTTP 202 and `{id,state,status_url}` |
@@ -208,3 +210,7 @@ Commands are limited to one line, 256 characters, no semicolon batches. `query` 
 - [Fluke 45 official user manual](https://media.fluke.com/d295e628-9a14-4bb4-9784-b10800c1cf0b_original%20file.pdf), chapter 5: function mnemonics, serial prompts, modifiers and measurement queries.
 - [Siglent SDS1000X-E programming resources](https://www.siglent.com/int/products-overview/sds1000x-e/).
 - [GATE architecture](docs/architecture.md) and [Fluke setup notes](docs/fluke45.md).
+
+## Experiments
+
+Use `save_experiment`, `delete_experiment`, and `check_experiment` to manage arrangements and check role bindings. Definitions include the DUT and its wiring, functional equipment requirements, and named test descriptions. Checks never configure hardware or energise outputs. `demo_experiment` adds a coupled simulated converter bench. `start_experiment` starts an asynchronous test with bindings and parameters; converter sweeps require explicit `enable_outputs=true` and `wiring_confirmed=true`. Poll `/v1/experiment-runs` for run completion, independently of command completion, and use `cancel_experiment` to stop. Each procedure defines its automatic metrics and presentation; results include SQLite, CSV, SVG and HTML artifacts. Output sweeps disable both ends at completion or cancellation; real PSU/load drivers are still pending. See [the experiment contract and buck converter example](docs/experiments.md).

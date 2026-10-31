@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from gate import __version__
 
-ACTIONS = {'scan', 'connect', 'edit_device', 'instrument_settings', 'display_measurements', 'copy_settings', 'forget', 'disconnect', 'settings', 'demo', 'record', 'stop_recording', 'select_function',
+ACTIONS = {'demo_experiment', 'start_experiment', 'cancel_experiment', 'save_experiment', 'delete_experiment', 'check_experiment', 'scan', 'connect', 'edit_device', 'instrument_settings', 'display_measurements', 'copy_settings', 'forget', 'disconnect', 'settings', 'demo', 'record', 'stop_recording', 'select_function',
            'static', 'sweep', 'output', 'cancel_sweep', 'query', 'write'}
 
 def runtime_directory():
@@ -62,6 +62,10 @@ class ControlServer:
                                      'actions': sorted(ACTIONS if owner.allow_raw else ACTIONS-{'query','write'})})
                 elif parts == ['v1', 'state']:
                     self.reply(200, state)
+                elif parts == ['v1', 'experiment-runs']:
+                    self.reply(200, {'active': state.get('experiment_run'), 'runs': state.get('experiment_runs', [])})
+                elif parts == ['v1', 'experiments']:
+                    self.reply(200, {'experiments': state['experiments']})
                 elif parts == ['v1', 'instruments']:
                     self.reply(200, {'instruments': state['instruments'], 'updated_utc_ns': state.get('updated_utc_ns')})
                 elif len(parts) == 3 and parts[:2] == ['v1', 'instruments']:
