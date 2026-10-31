@@ -10,6 +10,7 @@ from gi.repository import Gio, GLib, Gtk
 from gate.connections import communication_type, validate_resource
 from gate.service import BUS, PATH
 from gate.resources import documentation
+from gate.experiments import BUCK_CONVERTER
 
 # Keep the desktop's light/dark theme and Ubuntu accent colours.
 CSS = b'''
@@ -20,19 +21,24 @@ CSS = b'''
 .settings-list > row:first-child { border-top-left-radius: 12px; border-top-right-radius: 12px; }
 .settings-list > row:last-child { border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }
 .device-title { font-weight: bold; }
+.navigation-sidebar { padding: 8px; background: transparent; }
+.navigation-sidebar > row { border-radius: 8px; padding: 12px; }
+.sidebar-heading { padding: 18px 20px 6px; font-weight: bold; }
 '''
 
 
 class Window(Gtk.ApplicationWindow):
     def __init__(self, application):
         super().__init__(application=application, title='GATE · Devices & Settings',
-                         default_width=900, default_height=820)
+                         default_width=1150, default_height=820)
         self.pending = self.closed = self.syncing = self.interval_dirty = False
         self.online = False
+        self.experiments_supported = False
         self.ids = None
         self.row_kinds = {}
         self.labels, self.titles, self.device_actions = {}, {}, {}
         self.requests = set()
+        self.request_callbacks = {}
         self.view_state = {}
         self.connect_buttons = {}
         self.connected = set()
@@ -41,9 +47,40 @@ class Window(Gtk.ApplicationWindow):
         provider = Gtk.CssProvider()
         provider.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_display(self.get_display(), provider, 600)
-        self.set_titlebar(Gtk.HeaderBar())
+        self.page_title = Gtk.Label(label='Devices & Settings')
+        self.page_title.add_css_class('device-title')
+        header = Gtk.HeaderBar()
+        header.set_title_widget(self.page_title)
+        self.set_titlebar(header)
+        layout = Gtk.Box()
+        self.set_child(layout)
+        sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, width_request=250)
+        sidebar.add_css_class('sidebar')
+        sidebar.append(self.label('GATE', 'sidebar-heading'))
+        self.new_experiment_button = self.button('New Experiment…', self.new_experiment)
+        self.new_experiment_button.set_margin_start(12)
+        self.new_experiment_button.set_margin_end(12)
+        sidebar.append(self.new_experiment_button)
+        navigation_scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
+        sidebar.append(navigation_scroll)
+        self.navigation = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
+        self.navigation.add_css_class('navigation-sidebar')
+        self.navigation.connect('row-selected', self.select_page)
+        self.navigation.set_header_func(self.navigation_header)
+        navigation_scroll.set_child(self.navigation)
+        layout.append(sidebar)
+        layout.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+        self.pages = Gtk.Stack(hexpand=True, vexpand=True)
+        layout.append(self.pages)
+        self.experiment_definitions = {}
+        self.experiment_pages = {}
+        self.experiment_rows = {}
+        self.experiment_views = {}
         scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        self.set_child(scroll)
+        self.pages.add_named(scroll, 'devices')
+        self.devices_navigation = self.navigation_row('devices', 'Devices & Settings', 'preferences-system-symbolic')
+        self.navigation.select_row(self.devices_navigation)
+        self.render_experiments({'buck_converter': BUCK_CONVERTER})
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=28,
                         margin_top=28, margin_bottom=28, margin_start=32, margin_end=32)
         outer.set_halign(Gtk.Align.CENTER)
@@ -59,11 +96,12 @@ class Window(Gtk.ApplicationWindow):
         self.section_controls = []
         for kind, subtitle in (
                 ('TMC', 'USB instruments using the Test & Measurement Class'),
+                ('USB', 'Hantek 365 USB meters'),
                 ('Serial', 'Serial instruments and USB serial adapters'),
                 ('Network', 'Instruments with a raw SCPI TCP connection')):
             section, rows = self.section(kind, subtitle, outer)
             controls = Gtk.Box(spacing=6)
-            if kind == 'TMC':
+            if kind in ('TMC', 'USB'):
                 scan = self.button('Scan', lambda: self.command('scan'))
                 controls.append(scan)
                 self.section_controls.append(scan)
@@ -110,6 +148,7 @@ class Window(Gtk.ApplicationWindow):
         profile = Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home()/'.config'))) / 'gate/devices.json'
         try:
             saved = json.loads(profile.read_text())
+            self.render_experiments(saved.get('experiments', {'buck_converter': BUCK_CONVERTER}))
             self.render_devices(dict(instruments=[], configured_resources=saved.get('resources', []),
                                      saved_devices=saved.get('devices', {}), connections=saved.get('connections', {}),
                                      instrument_profiles=saved.get('instrument_profiles', {})))
@@ -117,6 +156,77 @@ class Window(Gtk.ApplicationWindow):
             pass
         self.timer = GLib.timeout_add(1000, self.refresh)
         self.refresh()
+
+    def new_experiment(self):
+        from gate.experiment_editor import ExperimentEditor
+        dialog = ExperimentEditor(self)
+        dialog.present()
+        return dialog
+
+    def navigation_header(self, row, previous):
+        row.set_header(self.label('Experiments', 'sidebar-heading')
+                       if row.page != 'devices' and previous and previous.page == 'devices' else None)
+
+    def navigation_row(self, page, title, icon):
+        row = Gtk.ListBoxRow()
+        row.page = page
+        row.page_title = title
+        content = Gtk.Box(spacing=12)
+        content.append(Gtk.Image.new_from_icon_name(icon))
+        label = self.label(title)
+        label.set_hexpand(True)
+        content.append(label)
+        row.set_child(content)
+        self.navigation.append(row)
+        return row
+
+    def select_page(self, navigation, row):
+        if row is None:
+            return
+        self.pages.set_visible_child_name(row.page)
+        self.page_title.set_text(row.page_title)
+        self.set_title('GATE · ' + row.page_title)
+
+    def experiment_page(self, definition):
+        scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=28,
+                          margin_top=28, margin_bottom=28, margin_start=32, margin_end=32,
+                          halign=Gtk.Align.CENTER, hexpand=True)
+        scroll.set_child(content)
+        content.append(self.label(definition['name'], 'settings-title'))
+        content.append(self.label(definition['description'], 'dim-label'))
+        from gate.experiment_view import ExperimentView
+        view = ExperimentView(self, definition)
+        content.append(view)
+        self.experiment_views[definition['id']] = view
+        return scroll
+
+    def render_experiments(self, definitions):
+        # Preserve navigation selection and scroll positions on routine polling.
+        selected_row = self.navigation.get_selected_row()
+        selected_page = selected_row.page if selected_row else 'devices'
+        for identity in list(self.experiment_pages):
+            if identity not in definitions or definitions[identity] != self.experiment_definitions[identity]:
+                row = self.experiment_rows.pop(identity)
+                selected = self.navigation.get_selected_row() == row
+                self.navigation.remove(row)
+                self.pages.remove(self.experiment_pages.pop(identity))
+                self.experiment_views.pop(identity, None)
+                if selected:
+                    self.navigation.select_row(self.devices_navigation)
+        for identity, definition in definitions.items():
+            if identity in self.experiment_pages:
+                continue
+            page_name = 'experiment:' + identity
+            page = self.experiment_page(definition)
+            self.pages.add_named(page, page_name)
+            row = self.navigation_row(page_name, definition['name'], 'applications-science-symbolic')
+            self.experiment_pages[identity] = page
+            self.experiment_rows[identity] = row
+        for row in self.experiment_rows.values():
+            if row.page == selected_page:
+                self.navigation.select_row(row)
+        self.experiment_definitions = json.loads(json.dumps(definitions))
 
     def label(self, text, css=None):
         label = Gtk.Label(label=text, xalign=0, wrap=True)
@@ -220,15 +330,20 @@ class Window(Gtk.ApplicationWindow):
         except Exception as exc:
             callback(None, exc)
 
-    def command(self, action, **args):
+    def command(self, action, on_complete=None, **args):
         request = str(uuid.uuid4())
         self.requests.add(request)
+        if on_complete:
+            self.request_callbacks[request] = on_complete
         def queued(value, error):
             if self.closed:
                 return
             if error:
                 self.requests.discard(request)
                 self.notify(str(error))
+                callback = self.request_callbacks.pop(request, None)
+                if callback:
+                    callback(dict(state='failed', error=str(error)))
             else:
                 if action == 'settings':
                     self.interval_dirty = False
@@ -273,8 +388,8 @@ class Window(Gtk.ApplicationWindow):
             fields['port'] = entry('TCP port', str(url.port or 5025), '5025')
             content.append(self.label('Raw SCPI TCP connections. Automatic LAN discovery is not available.', 'dim-label'))
         else:
-            fields['path'] = entry('TMC device path', identity or '', '/dev/usbtmc0')
-            content.append(self.label('Use Scan in the TMC section to find accessible USB instruments.', 'dim-label'))
+            fields['path'] = entry('USB address' if kind == 'USB' else 'TMC device path', identity or '', 'hantek://usb/3-1' if kind == 'USB' else '/dev/usbtmc0')
+            content.append(self.label('Use Scan to find accessible USB instruments. Hantek addresses follow the USB port when reconnected.', 'dim-label'))
         def read():
             if kind == 'Serial':
                 resource = f"serial://{fields['path'].get_text().strip()}?baud={rates[baud.get_selected()]}"
@@ -520,10 +635,17 @@ class Window(Gtk.ApplicationWindow):
             if self.closed:
                 return
             self.online = error is None
+            self.experiments_supported = error is None and 'experiments' in state
             if error:
                 self.status.set_text('Offline · Start the background service to manage devices')
                 self.api.set_text('Offline')
+                for request in list(self.request_callbacks):
+                    callback = self.request_callbacks.pop(request)
+                    self.requests.discard(request)
+                    callback(dict(state='failed', error='The background service is unavailable. Check its status in Devices & Settings and try again.'))
                 self.render_devices(self.view_state or dict(instruments=[]))
+                for view in self.experiment_views.values():
+                    view.offline()
             else:
                 self.status.set_text(state['status'] + (' · Recording active' if state['recording'] else ''))
                 if not self.interval_dirty:
@@ -532,12 +654,18 @@ class Window(Gtk.ApplicationWindow):
                     self.syncing = False
                 control = state.get('control_api')
                 self.api.set_text(f"{control['url']}\nPrivate local token · Advanced commands {'enabled' if control['allow_raw'] else 'disabled'}" if control else 'Disabled')
+                self.render_devices(state)
+                self.render_experiments(state.get('experiments', {}))
+                for view in self.experiment_views.values():
+                    view.update(state)
                 for request in list(self.requests):
                     result = state.get('commands', {}).get(request, {})
                     if result.get('state') in ('succeeded', 'failed'):
                         self.requests.discard(request)
                         self.notify(result.get('error', 'Changes applied.'))
-                self.render_devices(state)
+                        callback = self.request_callbacks.pop(request, None)
+                        if callback:
+                            callback(result)
             self.update_sensitivity()
         self.bus_call('Snapshot', None, updated)
         return True

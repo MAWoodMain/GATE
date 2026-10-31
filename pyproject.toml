@@ -12,5 +12,9 @@ gate = "gate.__main__:main"
 [project.entry-points."gate.drivers"]
 siglent_sds = "gate.drivers.siglent:SiglentSDS"
 fluke45 = "gate.drivers.fluke45:Fluke45"
+hantek365 = "gate.drivers.hantek365:Hantek365"
 [tool.setuptools.packages.find]
 include = ["gate*"]
+
+[tool.setuptools.package-data]
+gate = ["templates/*.json"]

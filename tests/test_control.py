@@ -7,14 +7,14 @@ from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
-from gate.control import ControlServer
+from gate.control import ControlServer, MAX_COMMAND_BYTES
 from gate.engine import Engine
 from gate.model import Reading
 
 class ControlTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
-        self.engine = Engine(.1)
+        self.engine = Engine(.1, experiment_directory=self.folder.name + '/runs')
         self.engine.submit('demo')
         self.engine.start()
         self.control = ControlServer(self.engine, port=0, directory=self.folder.name)
@@ -60,6 +60,71 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(device['category'],'power_supply')
         self.assertEqual(os.stat(self.control.path).st_mode & 0o777,0o600)
         self.assertEqual(self.control.server.server_address[0],'127.0.0.1')
+    def test_experiment_api(self):
+        status, body = self.request('/v1/experiments')
+        self.assertEqual(status, 200)
+        definition = body['experiments']['buck_converter']
+        definition['id'] = 'custom_converter'
+        _, accepted = self.request('/v1/commands', dict(action='save_experiment', experiment=definition))
+        self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+        _, accepted = self.request('/v1/commands', dict(action='check_experiment', experiment='custom_converter',
+            bindings={'supply': 'demo:power_supply'}))
+        result = self.completed(accepted['id'])
+        self.assertEqual(result['state'], 'succeeded')
+        self.assertFalse(result['result']['compatible'])
+        self.assertEqual(result['result']['errors'], ['load: no instrument assigned'])
+        _, accepted = self.request('/v1/commands', dict(action='delete_experiment', experiment='custom_converter'))
+        self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+        self.assertNotIn('custom_converter', self.request('/v1/experiments')[1]['experiments'])
+
+    def test_experiment_run_commands_and_history_endpoint(self):
+        _, accepted = self.request('/v1/commands', dict(action='demo_experiment'))
+        self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+        _, accepted = self.request('/v1/commands', dict(action='start_experiment', experiment='buck_converter',
+            test='efficiency', bindings={'supply':'demo:converter_supply', 'load':'demo:electronic_load'},
+            parameters={'input_start_v':8., 'input_stop_v':8., 'load_stop_a':.1, 'settle_s':10.},
+            enable_outputs=True, wiring_confirmed=True))
+        self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+        status, state = self.request('/v1/experiment-runs')
+        self.assertEqual(status, 200)
+        self.assertEqual(state['active']['state'], 'running')
+        _, accepted = self.request('/v1/commands', dict(action='cancel_experiment'))
+        self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+        self.assertEqual(self.request('/v1/experiment-runs')[1]['runs'][0]['state'], 'cancelled')
+
+    def test_large_declarative_definition_payload(self):
+        from gate.procedures import load_template
+        definition = self.request('/v1/experiments')[1]['experiments']['buck_converter']
+        definition['id'] = 'large_definition'
+        definition['tests'] = {}
+        for index in range(8):
+            spec = load_template('capture')
+            spec['description'] = 'Description ' + 'x'*1900
+            definition['tests'][f'test_{index}'] = spec
+        body = dict(action='save_experiment', experiment=definition)
+        self.assertGreater(len(json.dumps(body)), 16384)
+        status, accepted = self.request('/v1/commands', body)
+        self.assertEqual(status, 202)
+        self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+
+    def test_sequence_api_preflight_and_cancellation(self):
+        _, accepted = self.request('/v1/commands', dict(action='demo_experiment'))
+        self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+        command = dict(action='start_experiment_sequence', experiment='buck_converter',
+            bindings={'supply':'demo:converter_supply', 'load':'demo:electronic_load'},
+            tests=[dict(test='efficiency', parameters={'settle_s':10.}),
+                   dict(test='maximum_output_current', parameters={'settle_s':10.})],
+            enable_outputs=True, wiring_confirmed=True)
+        _, accepted = self.request('/v1/commands', command)
+        self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+        sequence = self.request('/v1/experiment-runs')[1]['sequence']
+        self.assertEqual(sequence['state'], 'running')
+        self.assertEqual([test['state'] for test in sequence['tests']], ['running', 'pending'])
+        _, accepted = self.request('/v1/commands', dict(action='cancel_experiment'))
+        self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+        sequence = self.request('/v1/experiment-runs')[1]['sequence']
+        self.assertEqual([test['state'] for test in sequence['tests']], ['cancelled', 'skipped'])
+
     def test_commands_complete_or_fail_and_update_live_state(self):
         status,accepted = self.request('/v1/commands',dict(action='static',instrument='demo:power_supply',voltage=5))
         self.assertEqual(status,202)
@@ -81,7 +146,7 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.request('/v1/commands',b'{oops',raw=True)[0],400)
         self.assertEqual(self.request('/v1/commands',b'{}',raw=True,headers={'Content-Type':'text/plain'})[0],415)
         self.assertEqual(self.request('/v1/commands',dict(action='query',instrument='fake',command='*IDN?'))[0],403)
-        self.assertEqual(self.request('/v1/commands',b'x'*17000,raw=True)[0],413)
+        self.assertEqual(self.request('/v1/commands',b'{}',raw=True,headers={'Content-Length':str(MAX_COMMAND_BYTES+1)})[0],413)
     def test_enabled_raw_operations_use_acquisition_owner_and_reject_batches(self):
         self.control.allow_raw=True
         calls=[]

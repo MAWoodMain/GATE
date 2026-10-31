@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Protocol
 
+DEFAULT_TEMPERATURE_UNIT = '°C'
+
 @dataclass(frozen=True)
 class Reading:
     channel: str

@@ -110,6 +110,8 @@ class CoreTests(unittest.TestCase):
                     cmd=line.decode().strip();commands.append(cmd)
                     if cmd=='*IDN?':
                         response='Siglent Technologies,SDS1202X-E,serial,version\n'
+                    elif cmd.endswith(':TRA?'):
+                        response=cmd[:-1]+' ON\n'
                     else:
                         parameter=cmd.split()[-1]
                         response=f'C1:PAVA {parameter},1.0E+00'+('Hz' if parameter=='FREQ' else 'V')+'\n'
@@ -123,7 +125,7 @@ class CoreTests(unittest.TestCase):
             instrument.close()
         finally:
             server.close();thread.join(timeout=3)
-        self.assertEqual(commands,['*IDN?','C1:PAVA? PKPK','C1:PAVA? RMS','C1:PAVA? FREQ','C2:PAVA? PKPK','C2:PAVA? RMS','C2:PAVA? FREQ'])
+        self.assertEqual(commands,['*IDN?','C1:TRA?','C1:PAVA? PKPK','C1:PAVA? RMS','C1:PAVA? FREQ','C2:TRA?','C2:PAVA? PKPK','C2:PAVA? RMS','C2:PAVA? FREQ'])
 
     def test_usb_message_spans_transfers_without_newline(self):
         from unittest.mock import patch

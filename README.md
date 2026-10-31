@@ -2,7 +2,7 @@
 
 **Gnome Automatic Test Equipment** — an agent-operated Ubuntu instrument service with a GNOME top bar for human monitoring and a small device-management/settings window.
 
-This is the initial application foundation. The GTK4 desktop, D-Bus acquisition service, SQLite recorder, CSV export, extension, and simulated bench are implemented. Hardware support includes the **Fluke 45** over RS-232 and **Siglent SDS1202X-E**, reading C1/C2 peak-to-peak, RMS, and frequency using SCPI over Linux USBTMC or a manually supplied TCP endpoint. USB identity and all six scalar queries have been verified against an attached SDS1202X-E running firmware 1.3.26; comparison against calibrated signals and the front panel is still pending. Waveform capture is a future addition.
+This is the initial application foundation. The GTK4 desktop, D-Bus acquisition service, SQLite recorder, CSV export, extension, and simulated bench are implemented. Hardware support includes **Hantek 365-series USB meters**, the **Fluke 45** over RS-232 and **Siglent SDS1202X-E**, reading C1/C2 peak-to-peak, RMS, and frequency using SCPI over Linux USBTMC or a manually supplied TCP endpoint. USB identity and all six scalar queries have been verified against an attached SDS1202X-E running firmware 1.3.26; comparison against calibrated signals and the front panel is still pending. Experiment waveform capture now supports calibrated traces, with a protocol-tested SDS1202X-E native-snapshot, single-shot and screenshot paths; USB screenshots have been verified on the attached scope; waveform accuracy and single-shot triggering await bench verification. The demo supports settled and armed transition captures.
 
 Agents: start with [the instrument control guide](AGENT_INSTRUMENT_GUIDE.md). The authenticated loopback HTTP API listens on port 8765 by default; its private token/URL are discovered from `$XDG_RUNTIME_DIR/gate/control.json`.
 
@@ -10,9 +10,10 @@ Agents: start with [the instrument control guide](AGENT_INSTRUMENT_GUIDE.md). Th
 
 | Category | Real hardware | Demo bench |
 |---|---|---|
-| Bench multimeters | Fluke 45: primary and secondary displays over RS-232, physically verified | DC voltage |
+| Multimeters | Fluke 45 over RS-232; Hantek 365 USB, with 365B temperature acquisition verified | DC voltage |
 | Bench power supplies | Driver interface ready; model drivers pending | Voltage/current readback, static voltage, stepped sweeps, output enable |
-| Oscilloscopes | SDS1202X-E scalar measurement driver, USB communication verified | Peak-to-peak and frequency |
+| Oscilloscopes | SDS1202X-E scalar acquisition verified; snapshots, single shots and screenshots protocol-tested, bench verification pending | Scalar readings plus converter ripple/protection traces |
+| Temperature probes | Hantek 365B thermocouple: Celsius/Fahrenheit acquisition and recording verified | DUT and ambient temperatures |
 
 Demo devices are explicitly labelled **SIMULATED** in the app and **DEMO** in the top bar. Their IDs start with `demo:` in recordings. GATE never infers supply command dialects from a generic SCPI ID; each real output driver needs model-specific limits and verification.
 
@@ -41,7 +42,7 @@ systemctl --user enable --now gate
 ~/.local/bin/gate gui
 ```
 
-Keep the checkout in place: the installer creates an editable virtual environment inside it and a launcher in `~/.local/bin`. Add that directory to your PATH if `gate` isn't found. The service runs as your normal user. The window follows the desktop theme and groups equipment into **TMC**, **Serial**, and **Network** settings sections. Each section has its own **Add…** dialog; TMC also has **Scan** for accessible USBTMC nodes. Serial settings include the device path and baud rate (8N1); Network settings include host and TCP port. Device actions use consistent icon buttons: **Connect/Disconnect**, **Settings**, and a **bin**. The Settings dialog separates **Connection** (path/baud or host/port) from **Instrument** (friendly name and saved measurement function). Instrument profiles use the driver’s model/type and hardware serial number, so names and settings follow an identified instrument across node renames and communication methods. Only one connection per physical instrument is acquired at a time; connecting the same instrument elsewhere hands over to that connection. Settings can be copied from another saved instrument of the exact same type, without copying its name, identity or addresses. The bin asks whether to remove only that connection (keeping the profile), or the entire instrument with all its settings and connections. Profiles without connections remain under **Saved Instruments**. Existing profiles migrate automatically. Drivers without a usable serial number keep separate connection-local profiles. Edited connection settings remain saved even if the device is unavailable. Closing the window leaves the service running. **Background Service** shows service state and provides **Start**, **Stop**, and **Restart** through the current user’s systemd service, plus the acquisition interval. Stopping/restarting ends any active logging session; start logging again explicitly afterward. Controls report systemd errors in the window. Connecting never resets an instrument; an explicitly saved measurement function is restored on connection. Output enable states and sweeps are never replayed.
+Keep the checkout in place: the installer creates an editable virtual environment inside it and a launcher in `~/.local/bin`. Add that directory to your PATH if `gate` isn't found. The service runs as your normal user. The window follows the desktop theme, with a left sidebar for **Devices & Settings** and each saved experiment. Experiment pages provide equipment selection, test parameters, execution, progress and saved charts/tables alongside the DUT, wiring and test descriptions. **Devices & Settings** groups equipment into **TMC**, **USB**, **Serial**, and **Network** settings sections. Each section has its own **Add…** dialog; TMC and USB also have **Scan** for accessible USBTMC nodes and known Hantek meters. Serial settings include the device path and baud rate (8N1); Network settings include host and TCP port. Device actions use consistent icon buttons: **Connect/Disconnect**, **Settings**, and a **bin**. The Settings dialog separates **Connection** (path/baud or host/port) from **Instrument** (friendly name and saved measurement function). Instrument profiles use the driver’s model/type and hardware serial number, so names and settings follow an identified instrument across node renames and communication methods. Only one connection per physical instrument is acquired at a time; connecting the same instrument elsewhere hands over to that connection. Settings can be copied from another saved instrument of the exact same type, without copying its name, identity or addresses. The bin asks whether to remove only that connection (keeping the profile), or the entire instrument with all its settings and connections. Profiles without connections remain under **Saved Instruments**. Existing profiles migrate automatically. Drivers without a usable serial number keep separate connection-local profiles. Edited connection settings remain saved even if the device is unavailable. Closing the window leaves the service running. **Background Service** shows service state and provides **Start**, **Stop**, and **Restart** through the current user’s systemd service, plus the acquisition interval. Stopping/restarting ends any active logging session; start logging again explicitly afterward. Controls report systemd errors in the window. Connecting never resets an instrument; an explicitly saved measurement function is restored on connection. Output enable states and sweeps are never replayed.
 
 The initial service uses a 1-second polling interval. Change it in **Background Service** or through the agent API; instrument profiles and connection methods persist across service restarts. Deliberately disconnected instruments stay disconnected until explicitly connected. USBTMC equipment is rescanned at startup. Stop recording before changing interval. Slower equipment may determine the actual cycle rate.
 
@@ -86,6 +87,16 @@ Use the agent API to set 0–30 V on the simulated supply (see the agent guide).
 
 Real output control is deliberately not implemented until a specific bench PSU model can be validated. The demo establishes the workflow and recording contract.
 
+## Experiments
+
+An **experiment** defines equipment roles and wiring around a device under test, independently of instrument make or model. For example, a DC supply feeds a buck converter's input while an electronic load draws current from its output. The same arrangement supports efficiency sweeps across input voltages and loads, or maximum-output-current tests at each input voltage.
+
+GATE now stores experiment definitions, named test descriptions and DUT terminal connections. Choose **New Experiment…** in the sidebar to create one using the Overview, Equipment, Wiring and Tests tabs, or start with the buck converter example. Agents can assign connected instruments to functional roles and check declared capabilities through the API. The built-in buck converter example requires DC sourcing, current sinking, and input/output voltage/current measurements. Experiments now run measurement captures, efficiency sweeps and maximum-output-current sweeps. Tests use a generic, versioned JSON specification for parameters, sweep axes, channel measurements, derived formulas, checks, grouped summaries and chart/table rendering. The built-in converter tests are JSON examples of that interpreter. Edit a test through **Parameters → Edit Test JSON…**. See [the JSON test contract](docs/test-spec.md) and [structural schema](gate/templates/test-v1.schema.json). Use **Add Simulated Converter Bench** to try the converter workflows; real output sweeps require verified supply/load drivers, which are still pending. **Run Selected Tests & Enable Outputs** explicitly arms the selected sweeps. The Run tab has per-test checkboxes for sequential execution, using each test’s own parameters and retaining separate results. Stop or a failure skips the remaining tests. Results include a raw SQLite recording, CSV, SVG charts and a standalone report, with recent runs retained across service restarts. See [experiments and the agent interface](docs/experiments.md).
+
+### Secondary observations
+
+Use **Instruments → Add Secondary Measurements…** to add DUT/ambient temperatures, ripple snapshots and armed protection captures to an existing experiment. Observation equipment can be optional. Temperatures record through settling; waveforms retain full calibrated samples, scalar statistics, sweep settings and timing. Results include waveform browsing, physical scope screenshots for single shots when supported, and secondary CSV export. Scope polling leaves off channels alone; experiments temporarily select only their configured channels and restore the previous trace states afterward. Required observations fail closed; missing optional observations remain unavailable rather than becoming zero. See [secondary measurements and driver support](docs/secondary-measurements.md).
+
 ## Logging and export
 
 Agents start/stop recording through the HTTP API or CLI commands below. All connected devices, including PSU settings, output state, and readback, enter the same recording. Instruments connected during recording join subsequent cycles. Stopping recording commits the session; CSV export also works against committed live data.
@@ -119,11 +130,13 @@ python3 -m compileall -q gate
 node --input-type=module --check < extension/extension.js
 # With GTK/display available; isolated session bus:
 dbus-run-session -- python3 tests/desktop_smoke.py
+dbus-run-session -- python3 tests/experiment_editor_smoke.py
+dbus-run-session -- python3 tests/experiment_run_smoke.py
 # For headless CI, install xvfb and use:
 dbus-run-session -- xvfb-run -a python3 tests/desktop_smoke.py
 ```
 
-See [Fluke 45 setup and verification](docs/fluke45.md), [architecture and driver development](docs/architecture.md), and [roadmap](docs/roadmap.md).
+See [Hantek 365 setup and verification](docs/hantek365.md), [Fluke 45 setup and verification](docs/fluke45.md), [architecture and driver development](docs/architecture.md), and [roadmap](docs/roadmap.md).
 
 The GNOME menu regression can be run on GNOME 50 with `gnome-shell-test-tool --headless --disable-animations --extension PACKAGE.zip tests/extension_smoke.js` under a private `dbus-run-session`; build the extension package using `gnome-extensions pack extension`. It checks actual Shell toggles, multiple/zero readings across instruments, open state, keyboard focus, unavailable readings, recovery, disconnected-device hiding, exclusive function switching, failure rollback and stable identity across transport changes.
 
@@ -161,3 +174,9 @@ The USB transport uses blocking kernel reads with a bounded USBTMC timeout and c
 See [AGENT_INSTRUMENT_GUIDE.md](AGENT_INSTRUMENT_GUIDE.md) for authentication, inspection, command completion, primary-function selection, logging, sweeps, raw commands and the known bench connection. Run `gate service --allow-raw` to opt into authenticated model-specific commands in addition to typed controls. The service binds only to localhost. `gate gui` opens the device manager; all monitoring lives in the top bar.
 
 On the development host, the user service is enabled for graphical login and runs with raw commands explicitly enabled. After restarting, reacquire the runtime manifest because its bearer token rotates.
+
+### Hantek 365 USB meters
+
+Hantek 365-series direct USB support is available under **Devices & Settings → USB → Scan**, including temperature, electrical measurement modes, top-bar readings, recording and secondary experiment measurements. Celsius/Fahrenheit acquisition has been checked with the attached 365B and supplied thermocouple. See [Hantek setup, probe connections and verification limits](docs/hantek365.md).
+
+Temperatures default to **°C** across device readings, new experiments, plots, reports and recordings. Fahrenheit remains an explicit measurement choice.

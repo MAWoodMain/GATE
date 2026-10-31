@@ -37,6 +37,7 @@ def parse_value(text, function):
 class Fluke45:
     device_type = 'FLUKE:45'
     category = 'multimeter'
+    experiment_capabilities = ('measure.scalar',)
     simulated = False
 
     @staticmethod

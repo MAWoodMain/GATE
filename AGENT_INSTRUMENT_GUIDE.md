@@ -34,12 +34,14 @@ for device in devices:
 
 ## HTTP contract
 
-Every request requires `Authorization: Bearer <token>`. POST bodies require `Content-Type: application/json` and a Content-Length of at most 16384 bytes. There is no CORS or anonymous API.
+Every request requires `Authorization: Bearer <token>`. POST bodies require `Content-Type: application/json` and a Content-Length of at most 1048576 bytes (1 MiB, to accommodate declarative experiment definitions). There is no CORS or anonymous API.
 
 | Endpoint | Purpose |
 |---|---|
 | `GET /v1/health` | API/application versions, raw-command setting, supported actions |
 | `GET /v1/state` | Complete cached acquisition state, command results, settings and recording status |
+| `GET /v1/experiment-runs` | Current/latest run, progress, retained results and output paths |
+| `GET /v1/experiments` | Saved model-independent equipment/DUT arrangements and test descriptions |
 | `GET /v1/instruments` | Instrument identities, readings and driver capabilities |
 | `GET /v1/instruments/<encoded-id>` | One instrument; percent-encode the entire ID including slashes |
 | `POST /v1/commands` | Submit an action; returns HTTP 202 and `{id,state,status_url}` |
@@ -208,3 +210,15 @@ Commands are limited to one line, 256 characters, no semicolon batches. `query` 
 - [Fluke 45 official user manual](https://media.fluke.com/d295e628-9a14-4bb4-9784-b10800c1cf0b_original%20file.pdf), chapter 5: function mnemonics, serial prompts, modifiers and measurement queries.
 - [Siglent SDS1000X-E programming resources](https://www.siglent.com/int/products-overview/sds1000x-e/).
 - [GATE architecture](docs/architecture.md) and [Fluke setup notes](docs/fluke45.md).
+
+## Experiments
+
+Use `save_experiment`, `delete_experiment`, and `check_experiment` to manage arrangements and check role bindings. Definitions include the DUT and its wiring, functional equipment requirements, and named test descriptions. Checks never configure hardware or energise outputs. `demo_experiment` adds a coupled simulated converter bench. `start_experiment` starts an asynchronous test with bindings and parameters; converter sweeps require explicit `enable_outputs=true` and `wiring_confirmed=true`. Poll `/v1/experiment-runs` for run completion, independently of command completion, and use `cancel_experiment` to stop. Each procedure defines its automatic metrics and presentation; results include SQLite, CSV, SVG and HTML artifacts. Output sweeps disable both ends at completion or cancellation; real PSU/load drivers are still pending. See [the experiment contract and buck converter example](docs/experiments.md).
+
+Tests are schema-v1 JSON objects, not fixed Python procedure types. See [the generic test specification](docs/test-spec.md) for sweeps, expressions, reductions, checks and rendering. `experiment_spec_version: 1` in the snapshot advertises support. Legacy definitions migrate on load/save; each run retains its resolved test JSON. The HTTP request limit is 1 MiB to accommodate larger definitions.
+
+Secondary measurements use optional roles (`optional: true`, empty terminals permitted), `secondary_measurements` for scalar probes, and `waveforms` for settled/transition captures. Snapshots advertise `secondary_measurements_version: 1` and driver `waveform_capabilities`. Missing optional probes preserve primary test validity. Mark observations required for preflight/fail-closed behavior. Waveform data/CSV/SVG references and scalar statistics appear in run metadata; raw samples live in the run database. See [secondary measurement semantics and hardware verification status](docs/secondary-measurements.md).
+
+Scope channel/single-shot behaviour: scalar polling never measures off traces. Runs temporarily select the union of scalar and waveform channels and restore trace states afterward. SDS1202X-E transition captures use the current timebase/pre-trigger position (`window_s`/`pretrigger` null), program/verify the edge trigger, wait for readiness, and require a fresh acquisition with STOP before waveform and BMP screen transfer. Screens are saved by default for transition captures (`screenshot: false` opts out), displayed in Results and linked in reports. Trigger settings restore on capture cleanup. These additions are protocol-fixture tested and await hardware verification. See [secondary measurements](docs/secondary-measurements.md).
+
+Hantek 365 direct USB: use USB Scan or `hantek://usb/PORT` (for example `hantek://usb/3-3.1.3`). It is a binary vendor interface, never SCPI or serial. The 365B thermocouple path and Celsius/Fahrenheit switching are hardware checked; other ranges/models are protocol-tested. Select TEMPC/TEMPF through instrument settings. Celsius logical quantities `temperature`/`dut_temperature` map to the single `temperature` channel; there is no fabricated ambient probe. USB serial `Y` is not unique, so identity remains port-local. See [Hantek 365](docs/hantek365.md) for permissions, settling and quality flags.

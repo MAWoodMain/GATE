@@ -1,0 +1,386 @@
+{
+  "schema_version": 1,
+  "label": "Maximum output current sweep",
+  "description": "Increase output current at each input voltage until the configured regulation condition fails; retain the last acceptable current.",
+  "parameters": {
+    "input_start_v": {
+      "label": "Input start",
+      "unit": "V",
+      "default": 8.0,
+      "min": 0.01,
+      "max": 1000.0,
+      "step": 0.5,
+      "type": "number"
+    },
+    "input_stop_v": {
+      "label": "Input stop",
+      "unit": "V",
+      "default": 12.0,
+      "min": 0.01,
+      "max": 1000.0,
+      "step": 0.5,
+      "type": "number"
+    },
+    "input_step_v": {
+      "label": "Input step",
+      "unit": "V",
+      "default": 2.0,
+      "min": 0.001,
+      "max": 1000.0,
+      "step": 0.1,
+      "type": "number"
+    },
+    "load_start_a": {
+      "label": "Load start",
+      "unit": "A",
+      "default": 0.1,
+      "min": 0.0,
+      "max": 1000.0,
+      "step": 0.1,
+      "type": "number"
+    },
+    "load_stop_a": {
+      "label": "Load stop",
+      "unit": "A",
+      "default": 4.0,
+      "min": 0.0,
+      "max": 1000.0,
+      "step": 0.1,
+      "type": "number"
+    },
+    "load_step_a": {
+      "label": "Load step",
+      "unit": "A",
+      "default": 0.5,
+      "min": 0.001,
+      "max": 1000.0,
+      "step": 0.1,
+      "type": "number"
+    },
+    "settle_s": {
+      "label": "Settling time",
+      "unit": "s",
+      "default": 1.0,
+      "min": 0.1,
+      "max": 3600.0,
+      "step": 0.1,
+      "type": "number"
+    },
+    "samples_per_point": {
+      "label": "Samples per point",
+      "unit": "",
+      "default": 1,
+      "min": 1,
+      "max": 100,
+      "step": 1,
+      "type": "integer"
+    },
+    "current_limit_a": {
+      "label": "Supply current limit",
+      "unit": "A",
+      "default": 3.0,
+      "min": 0.001,
+      "max": 1000.0,
+      "step": 0.1,
+      "type": "number"
+    },
+    "nominal_output_v": {
+      "label": "Expected output",
+      "unit": "V",
+      "default": 5.0,
+      "min": 0.001,
+      "max": 1000.0,
+      "step": 0.1,
+      "type": "number"
+    },
+    "tolerance_pct": {
+      "label": "Output regulation tolerance",
+      "unit": "%",
+      "default": 5.0,
+      "min": 0.1,
+      "max": 50.0,
+      "step": 0.5,
+      "type": "number"
+    }
+  },
+  "axes": [
+    {
+      "id": "input_voltage_set_v",
+      "label": "Input voltage setpoint",
+      "unit": "V",
+      "role": "supply",
+      "control": "voltage",
+      "start": "input_start_v",
+      "stop": "input_stop_v",
+      "step": "input_step_v"
+    },
+    {
+      "id": "load_current_set_a",
+      "label": "Load current setpoint",
+      "unit": "A",
+      "role": "load",
+      "control": "current",
+      "start": "load_start_a",
+      "stop": "load_stop_a",
+      "step": "load_step_a"
+    }
+  ],
+  "setup": [
+    {
+      "role": "supply",
+      "control": "current_limit",
+      "value": "current_limit_a"
+    }
+  ],
+  "before_point": [
+    {
+      "role": "load",
+      "control": "current",
+      "value": 0
+    }
+  ],
+  "outputs": [
+    "supply",
+    "load"
+  ],
+  "limits": {
+    "supply": {
+      "voltage": "input_stop_v",
+      "current": "current_limit_a"
+    },
+    "load": {
+      "voltage": "nominal_output_v * (1 + tolerance_pct / 100)",
+      "current": "load_stop_a"
+    }
+  },
+  "acquisition": {
+    "settle_s": "settle_s",
+    "samples": "samples_per_point",
+    "repeat": 1,
+    "capture_all": false,
+    "on_invalid": "fail"
+  },
+  "measurements": {
+    "input_voltage_v": {
+      "label": "Input voltage",
+      "unit": "V",
+      "role": "supply",
+      "quantity": "voltage",
+      "required": true
+    },
+    "input_current_a": {
+      "label": "Input current",
+      "unit": "A",
+      "role": "supply",
+      "quantity": "current",
+      "required": true
+    },
+    "output_voltage_v": {
+      "label": "Output voltage",
+      "unit": "V",
+      "role": "load",
+      "quantity": "voltage",
+      "required": true
+    },
+    "output_current_a": {
+      "label": "Output current",
+      "unit": "A",
+      "role": "load",
+      "quantity": "current",
+      "required": true
+    }
+  },
+  "derived": {
+    "input_power_w": {
+      "label": "Input power",
+      "unit": "W",
+      "expression": "input_voltage_v * input_current_a",
+      "aggregate": "sample_mean"
+    },
+    "output_power_w": {
+      "label": "Output power",
+      "unit": "W",
+      "expression": "output_voltage_v * output_current_a",
+      "aggregate": "sample_mean"
+    },
+    "efficiency_pct": {
+      "label": "Efficiency",
+      "unit": "%",
+      "expression": "100 * output_power_w / input_power_w",
+      "aggregate": "point"
+    },
+    "in_regulation": {
+      "label": "In regulation",
+      "unit": "",
+      "expression": "abs(output_voltage_v - nominal_output_v) <= nominal_output_v * tolerance_pct / 100",
+      "aggregate": "point"
+    },
+    "temperature_rise_c": {
+      "label": "Temperature rise above ambient",
+      "unit": "\u00b0C",
+      "expression": "dut_temperature_c - ambient_temperature_c",
+      "aggregate": "point"
+    }
+  },
+  "checks": [
+    {
+      "stage": "sample",
+      "expression": "input_voltage_v >= 0 and input_current_a >= 0 and output_voltage_v >= 0 and output_current_a >= 0",
+      "message": "Unexpected negative DC readback; sweep stopped"
+    },
+    {
+      "stage": "sample",
+      "expression": "output_voltage_v <= nominal_output_v * (1 + tolerance_pct / 100)",
+      "message": "Output exceeded the configured voltage tolerance"
+    },
+    {
+      "stage": "sample",
+      "expression": "input_current_a <= current_limit_a * 1.05",
+      "message": "Input current exceeded the configured limit"
+    }
+  ],
+  "plots": [
+    {
+      "kind": "line",
+      "data": "summary",
+      "x": "input_voltage_set_v",
+      "y": "maximum_current_a",
+      "title": "Maximum output current versus input voltage",
+      "x_scale": "linear",
+      "y_scale": "linear",
+      "markers": {
+        "field": "boundary",
+        "styles": {
+          "at_least_sweep_limit": {
+            "shape": "triangle",
+            "label": "At least sweep limit"
+          },
+          "threshold_reached": {
+            "shape": "circle",
+            "label": "Threshold reached"
+          }
+        }
+      }
+    },
+    {
+      "kind": "line",
+      "data": "secondary",
+      "x": "elapsed_s",
+      "y": "dut_temperature_c",
+      "title": "DUT temperature versus time"
+    },
+    {
+      "kind": "line",
+      "data": "secondary",
+      "x": "elapsed_s",
+      "y": "ambient_temperature_c",
+      "title": "Ambient temperature versus time"
+    },
+    {
+      "kind": "line",
+      "data": "points",
+      "x": "elapsed_s",
+      "y": "temperature_rise_c",
+      "title": "Temperature rise versus time"
+    },
+    {
+      "kind": "line",
+      "data": "points",
+      "x": "output_current_a",
+      "y": "ripple_peak_to_peak",
+      "series": "input_voltage_set_v",
+      "title": "Ripple peak-to-peak versus load"
+    }
+  ],
+  "table": {
+    "data": "summary"
+  },
+  "stop_when": {
+    "expression": "not in_regulation",
+    "scope": "group"
+  },
+  "reduce": {
+    "group_by": [
+      "input_voltage_set_v"
+    ],
+    "where": "in_regulation",
+    "metrics": {
+      "maximum_current_a": {
+        "label": "Maximum acceptable output current",
+        "unit": "A",
+        "expression": "output_current_a",
+        "reducer": "last"
+      },
+      "output_voltage_v": {
+        "label": "Output voltage",
+        "unit": "V",
+        "expression": "output_voltage_v",
+        "reducer": "last"
+      }
+    },
+    "status": {
+      "field": "boundary",
+      "stopped": "threshold_reached",
+      "exhausted": "at_least_sweep_limit"
+    }
+  },
+  "notes": [
+    "At least sweep limit is a lower bound: the DUT was still in regulation at the highest configured current. The true maximum was not reached."
+  ],
+  "secondary_measurements": {
+    "dut_temperature_c": {
+      "label": "DUT temperature",
+      "unit": "\u00b0C",
+      "role": "thermal",
+      "quantity": "dut_temperature",
+      "required": false,
+      "kind": "temperature",
+      "location": "DUT"
+    },
+    "ambient_temperature_c": {
+      "label": "Ambient temperature",
+      "unit": "\u00b0C",
+      "role": "thermal",
+      "quantity": "ambient_temperature",
+      "required": false,
+      "kind": "temperature",
+      "location": "Ambient"
+    }
+  },
+  "waveforms": {
+    "ripple": {
+      "label": "Output ripple under load",
+      "unit": "V",
+      "role": "scope",
+      "channel": "C1",
+      "required": false,
+      "phase": "settled",
+      "when": "output_current_a > 0",
+      "points": 2048,
+      "window_s": null,
+      "pretrigger": null,
+      "timeout_s": 3,
+      "max_captures": 8,
+      "trigger": null
+    },
+    "overcurrent": {
+      "label": "Overcurrent protection transient",
+      "unit": "V",
+      "role": "scope",
+      "channel": "C1",
+      "required": false,
+      "phase": "transition",
+      "when": "load_current_set_a >= 3.5",
+      "points": 4096,
+      "window_s": null,
+      "pretrigger": null,
+      "timeout_s": 10,
+      "max_captures": 3,
+      "trigger": {
+        "level": "nominal_output_v * (1 - tolerance_pct / 100)",
+        "slope": "falling"
+      },
+      "screenshot": true
+    }
+  }
+}

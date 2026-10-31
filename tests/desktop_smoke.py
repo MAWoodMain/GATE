@@ -42,15 +42,42 @@ try:
         try:
             assert len(window.labels)==3, window.status.get_text()
             assert window.get_title() == 'GATE · Devices & Settings'
+            from gate.experiments import BUCK_CONVERTER
+            import copy
+            assert window.pages.get_visible_child_name() == 'devices'
+            experiment_row = window.experiment_rows['buck_converter']
+            assert experiment_row.get_header().get_text() == 'Experiments'
+            window.navigation.select_row(experiment_row)
+            assert window.pages.get_visible_child_name() == 'experiment:buck_converter'
+            assert window.page_title.get_text() == BUCK_CONVERTER['name']
+            page = window.experiment_pages['buck_converter']
+            window.render_experiments({'buck_converter': BUCK_CONVERTER})
+            assert window.experiment_pages['buck_converter'] is page
+            assert window.navigation.get_selected_row() is experiment_row
+            updated = copy.deepcopy(BUCK_CONVERTER)
+            updated['name'] = 'Updated converter'
+            second = copy.deepcopy(BUCK_CONVERTER)
+            second['id'], second['name'] = 'second', 'Second experiment'
+            window.render_experiments({'buck_converter': updated, 'second': second})
+            assert len(window.experiment_rows) == 2
+            assert window.page_title.get_text() == 'Updated converter'
+            assert window.pages.get_visible_child_name() == 'experiment:buck_converter'
+            window.render_experiments({'second': second})
+            assert window.pages.get_visible_child_name() == 'devices'
+            window.render_experiments({'buck_converter': BUCK_CONVERTER})
+            window.navigation.select_row(window.devices_navigation)
             assert all('Connected' in label.get_text() or 'Demo' in label.get_text() for label in window.labels.values())
             assert not hasattr(window, 'voltage'), 'Measurement/output controls belong outside device manager'
             # Exercise missing-device sections, structured editor and service actions without touching hardware.
-            fixture = dict(instruments=[], configured_resources=['/dev/usbtmc9', 'serial:///dev/ttyUSB9?baud=9600', 'tcp://missing:5025'],
+            fixture = dict(instruments=[], configured_resources=['/dev/usbtmc9', 'hantek://usb/3-1', 'serial:///dev/ttyUSB9?baud=9600', 'tcp://missing:5025'],
                            saved_devices={'/dev/usbtmc9': {'name': 'Remembered scope'}})
             window.render_devices(fixture)
             assert window.titles['/dev/usbtmc9'].get_text() == 'Remembered scope'
             assert all('Disconnected' in label.get_text() for label in window.labels.values())
-            assert all(window.sections[kind].get_first_child() for kind in ('TMC', 'Serial', 'Network'))
+            assert all(window.sections[kind].get_first_child() for kind in ('TMC', 'USB', 'Serial', 'Network'))
+            usb_fields = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            read_usb = window.connection_fields('USB', 'hantek://usb/3-1', usb_fields)
+            assert read_usb() == 'hantek://usb/3-1'
             dialog = window.edit_connection('Serial', 'serial:///dev/ttyUSB9?baud=9600')
             dialogs.append(dialog)
             entry = dialog.get_content_area().get_first_child().get_next_sibling()
@@ -146,7 +173,7 @@ try:
             window.render_devices(fixture)
             window.update_sensitivity()
             window.notify('')
-            print('PASS: D-Bus recording, device icons/toggle, settings tabs/copy, scoped forget, service controls')
+            print('PASS: sidebar navigation and experiment updates, D-Bus recording, device icons/toggle, settings tabs/copy, scoped forget, service controls')
         except Exception as exc:
             errors.append(exc)
         finally:

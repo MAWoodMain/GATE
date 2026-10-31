@@ -4,6 +4,8 @@ from urllib.parse import parse_qs, urlsplit
 
 
 def communication_type(resource):
+    if resource.startswith('hantek://'):
+        return 'USB'
     if resource.startswith('serial://'):
         return 'Serial'
     if resource.startswith('tcp://'):
@@ -19,6 +21,8 @@ def validate_resource(resource):
     if re.fullmatch(r'/dev/usbtmc[0-9]+', resource):
         return resource
     url = urlsplit(resource)
+    if url.scheme == 'hantek' and url.netloc == 'usb' and re.fullmatch(r'/[0-9]+-[0-9]+(?:\.[0-9]+)*', url.path) and not (url.query or url.fragment):
+        return resource
     if url.scheme == 'serial' and not url.netloc and url.path.startswith('/dev/'):
         options = parse_qs(url.query, strict_parsing=True)
         if url.fragment or set(options) - {'baud'} or any(len(v) != 1 for v in options.values()):
@@ -31,4 +35,4 @@ def validate_resource(resource):
         if url.path or url.query or url.fragment or not 1 <= (url.port if url.port is not None else 5025) <= 65535:
             raise ValueError('Use tcp://host:port for a raw SCPI connection')
         return resource
-    raise ValueError('Use /dev/usbtmcN, serial:///dev/ttyUSB0?baud=9600 or tcp://host:5025')
+    raise ValueError('Use /dev/usbtmcN, hantek://usb/PORT, serial:///dev/ttyUSB0?baud=9600 or tcp://host:5025')
