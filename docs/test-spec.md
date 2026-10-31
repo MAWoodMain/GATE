@@ -50,6 +50,8 @@ Use **Parameters → Edit Test…** to open the GUI test builder for an existing
 
 The split is in the editor: execution and visualization remain in one schema-version-1 JSON document for compatibility with existing API clients, templates and saved runs. Saving still uses the full reference/expression/dataset validator. No running test is modified: saving changes the experiment definition, and each started run retains its own specification snapshot.
 
+For a complete example using the forms, see the [screenshotted voltage sweep walkthrough](voltage-sweep-guide.md).
+
 ## Fields and execution order
 
 | Field | Meaning |
