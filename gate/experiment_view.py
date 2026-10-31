@@ -229,7 +229,7 @@ class ExperimentView(Gtk.Box):
     def edit_specification(self):
         identity = self.test_picker.get_active_id()
         dialog = Gtk.Dialog(title='Test Builder', transient_for=self.owner, modal=True,
-                            default_width=820, default_height=720, use_header_bar=True)
+                            default_width=960, default_height=760, use_header_bar=True)
         dialog.add_button('Cancel', Gtk.ResponseType.CANCEL)
         save = dialog.add_button('Save', Gtk.ResponseType.ACCEPT)
         save.add_css_class('suggested-action')

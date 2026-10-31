@@ -74,3 +74,50 @@ assert builder.get_spec() == load_template('capture')
 builder.refresh_json()
 assert builder.json_spec() == builder.get_spec()
 print('PASS: test builder template round trips, split forms, edits, ordering, validation and JSON import')
+
+# Workflow choices cannot leave mutually exclusive JSON fields enabled together.
+builder = TestBuilder(load_template('efficiency'), BUCK_CONVERTER['roles'])
+original = builder.get_spec()
+sweeps = builder.forms['Testing'].children['axes'][1]
+sweep = sweeps.rows[0][2]
+sweep.mode_picker.set_active(1)
+values = sweep.children['values'][1]
+values.add_row(8)
+values.add_row(12)
+axis = builder.get_spec()['axes'][0]
+assert axis['values'] == [8, 12]
+assert not {'start', 'stop', 'step'} & set(axis)
+sweep.mode_picker.set_active(0)
+assert builder.get_spec() == original
+sweep.drive_toggle.set_active(False)
+assert not {'role', 'control'} & set(builder.get_spec()['axes'][0])
+sweep.drive_toggle.set_active(True)
+assert builder.get_spec() == original
+# Opening and closing a card is presentation-only.
+card = sweeps.rows[0][0]
+expander = card.get_first_child().get_first_child()
+expander.emit('activate')
+assert sweep.get_parent().get_visible()
+expander.emit('activate')
+assert not sweep.get_parent().get_visible()
+assert builder.get_spec() == original
+# Removing an entry can be undone without losing its edits or position.
+sweeps.remove_row(sweeps.rows[0])
+sweeps.undo_remove()
+assert builder.get_spec() == original
+# Friendly labels in a picker still serialize the metric identifier.
+chart = builder.forms['Output visualization'].children['plots'][1].rows[0][2]
+y = chart.children['y'][1]
+y.picker.set_active_id('output_voltage_v')
+assert builder.get_spec()['plots'][0]['y'] == 'output_voltage_v'
+assert y.entry.get_text() != 'output_voltage_v'
+builder.check_test()
+assert 'Definition valid' in builder.error.get_text(), builder.error.get_text()
+# Useful defaults and unique formula names for a newly added parameter.
+params = builder.forms['Testing'].children['parameters'][1]
+params.add_row(params.new_item(), params.new_key())
+assert params.rows[-1][1].get_text()
+new_parameter = params.rows[-1][2].value()
+assert new_parameter['min'] <= new_parameter['default'] <= new_parameter['max']
+assert new_parameter['step'] > 0
+print('PASS: workflow modes, card disclosure, undo, named result choices and definition check')
