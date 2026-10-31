@@ -2,13 +2,14 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from gate.drivers.siglent import SiglentSDS
 from gate.drivers.fluke45 import Fluke45
+from gate.drivers.keysight344xxa import Keysight344xxA
 from gate.serial import FlukeSerial
 from gate.transport import SCPI
 from gate.hantek_usb import HantekUSB, resources as hantek_resources
 from gate.drivers.hantek365 import Hantek365
 
 def driver_types():
-    drivers = [SiglentSDS, Fluke45, Hantek365]
+    drivers = [SiglentSDS, Fluke45, Hantek365, Keysight344xxA]
     for entry in entry_points(group="gate.drivers"):
         cls = entry.load()
         if cls not in drivers:

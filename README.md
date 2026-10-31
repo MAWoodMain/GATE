@@ -2,7 +2,7 @@
 
 **Gnome Automatic Test Equipment** — an agent-operated Ubuntu instrument service with a GNOME top bar for human monitoring and a small device-management/settings window.
 
-This is the initial application foundation. The GTK4 desktop, D-Bus acquisition service, SQLite recorder, CSV export, extension, and simulated bench are implemented. Hardware support includes **Hantek 365-series USB meters**, the **Fluke 45** over RS-232 and **Siglent SDS1202X-E**, reading C1/C2 peak-to-peak, RMS, and frequency using SCPI over Linux USBTMC or a manually supplied TCP endpoint. USB identity and all six scalar queries have been verified against an attached SDS1202X-E running firmware 1.3.26; comparison against calibrated signals and the front panel is still pending. Experiment waveform capture now supports calibrated traces, with a protocol-tested SDS1202X-E native-snapshot, single-shot and screenshot paths; USB screenshots have been verified on the attached scope; waveform accuracy and single-shot triggering await bench verification. The demo supports settled and armed transition captures.
+This is the initial application foundation. The GTK4 desktop, D-Bus acquisition service, SQLite recorder, CSV export, extension, and simulated bench are implemented. Hardware support includes **Keysight 344xxA bench DMMs** (protocol-tested; bench verification pending), **Hantek 365-series USB meters**, the **Fluke 45** over RS-232 and **Siglent SDS1202X-E**, reading C1/C2 peak-to-peak, RMS, and frequency using SCPI over Linux USBTMC or a manually supplied TCP endpoint. USB identity and all six scalar queries have been verified against an attached SDS1202X-E running firmware 1.3.26; comparison against calibrated signals and the front panel is still pending. Experiment waveform capture now supports calibrated traces, with a protocol-tested SDS1202X-E native-snapshot, single-shot and screenshot paths; USB screenshots have been verified on the attached scope; waveform accuracy and single-shot triggering await bench verification. The demo supports settled and armed transition captures.
 
 Agents: start with [the instrument control guide](AGENT_INSTRUMENT_GUIDE.md). The authenticated loopback HTTP API listens on port 8765 by default; its private token/URL are discovered from `$XDG_RUNTIME_DIR/gate/control.json`.
 
@@ -10,7 +10,7 @@ Agents: start with [the instrument control guide](AGENT_INSTRUMENT_GUIDE.md). Th
 
 | Category | Real hardware | Demo bench |
 |---|---|---|
-| Multimeters | Fluke 45 over RS-232; Hantek 365 USB, with 365B temperature acquisition verified | DC voltage |
+| Multimeters | Keysight 34401A/10A/11A/60A/61A/65A/70A over USBTMC or raw TCP; Fluke 45 over RS-232; Hantek 365 USB, with 365B temperature acquisition verified | DC voltage |
 | Bench power supplies | Driver interface ready; model drivers pending | Voltage/current readback, static voltage, stepped sweeps, output enable |
 | Oscilloscopes | SDS1202X-E scalar acquisition verified; snapshots, single shots and screenshots protocol-tested, bench verification pending | Scalar readings plus converter ripple/protection traces |
 | Temperature probes | Hantek 365B thermocouple: Celsius/Fahrenheit acquisition and recording verified | DUT and ambient temperatures |
@@ -136,7 +136,7 @@ dbus-run-session -- python3 tests/experiment_run_smoke.py
 dbus-run-session -- xvfb-run -a python3 tests/desktop_smoke.py
 ```
 
-See [Hantek 365 setup and verification](docs/hantek365.md), [Fluke 45 setup and verification](docs/fluke45.md), [architecture and driver development](docs/architecture.md), and [roadmap](docs/roadmap.md).
+See [Keysight 344xxA setup and verification](docs/keysight344xxa.md), [Hantek 365 setup and verification](docs/hantek365.md), [Fluke 45 setup and verification](docs/fluke45.md), [architecture and driver development](docs/architecture.md), and [roadmap](docs/roadmap.md).
 
 The GNOME menu regression can be run on GNOME 50 with `gnome-shell-test-tool --headless --disable-animations --extension PACKAGE.zip tests/extension_smoke.js` under a private `dbus-run-session`; build the extension package using `gnome-extensions pack extension`. It checks actual Shell toggles, multiple/zero readings across instruments, open state, keyboard focus, unavailable readings, recovery, disconnected-device hiding, exclusive function switching, failure rollback and stable identity across transport changes.
 
@@ -180,3 +180,7 @@ On the development host, the user service is enabled for graphical login and run
 Hantek 365-series direct USB support is available under **Devices & Settings → USB → Scan**, including temperature, electrical measurement modes, top-bar readings, recording and secondary experiment measurements. Celsius/Fahrenheit acquisition has been checked with the attached 365B and supplied thermocouple. See [Hantek setup, probe connections and verification limits](docs/hantek365.md).
 
 Temperatures default to **°C** across device readings, new experiments, plots, reports and recordings. Fahrenheit remains an explicit measurement choice.
+
+### Keysight 344xxA bench DMMs
+
+Connect supported Keysight, Agilent and HP meters through TMC Scan or a raw TCP endpoint. Primary function selection, scalar readings, logging and DC voltage/current experiment channels are implemented. See [supported models, trigger settings, USB access and verification limits](docs/keysight344xxa.md).

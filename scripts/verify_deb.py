@@ -24,6 +24,9 @@ def verify(archive):
         required={'usr/bin/gate','usr/lib/python3/dist-packages/gate/__main__.py',
             'usr/lib/systemd/user/gate.service','usr/lib/udev/rules.d/70-gate-siglent.rules',
             'usr/lib/udev/rules.d/70-gate-hantek.rules',
+            'usr/lib/udev/rules.d/70-gate-keysight.rules',
+            'usr/lib/python3/dist-packages/gate/drivers/keysight344xxa.py',
+            'usr/share/doc/gate-ate/docs/keysight344xxa.md',
             'usr/share/applications/io.github.MAWoodMain.GATE.desktop',
             'usr/share/gnome-shell/extensions/gate@mawoodmain.github.io/extension.js',
             'usr/share/doc/gate-ate/AGENT_INSTRUMENT_GUIDE.md','usr/share/doc/gate-ate/INSTALL.md'}

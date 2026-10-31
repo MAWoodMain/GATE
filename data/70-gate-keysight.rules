@@ -1,0 +1,4 @@
+# Keysight and Agilent USBTMC instruments: access for the active local seat.
+# Restrict to kernel USBTMC nodes; do not grant access to other vendor devices.
+SUBSYSTEM=="usbmisc", KERNEL=="usbtmc[0-9]*", ATTRS{idVendor}=="0957", TAG+="uaccess"
+SUBSYSTEM=="usbmisc", KERNEL=="usbtmc[0-9]*", ATTRS{idVendor}=="2a8d", TAG+="uaccess"
