@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "label": "Voltage sweep with point measurements",
+  "description": "Sweep converter input from 8 to 12 V; measure input and output voltage and current at each point.",
+  "parameters": {
+    "start_v": {
+      "label": "Start voltage",
+      "unit": "V",
+      "default": 8,
+      "min": 8,
+      "max": 12,
+      "step": 1,
+      "type": "number"
+    },
+    "stop_v": {
+      "label": "Stop voltage",
+      "unit": "V",
+      "default": 12,
+      "min": 8,
+      "max": 12,
+      "step": 1,
+      "type": "number"
+    },
+    "step_v": {
+      "label": "Voltage increment",
+      "unit": "V",
+      "default": 1,
+      "min": 0.1,
+      "max": 4,
+      "step": 0.1,
+      "type": "number"
+    }
+  },
+  "axes": [
+    {
+      "id": "command_v",
+      "label": "Commanded input voltage",
+      "unit": "V",
+      "role": "supply",
+      "control": "voltage",
+      "start": "start_v",
+      "stop": "stop_v",
+      "step": "step_v"
+    }
+  ],
+  "setup": [
+    {
+      "role": "supply",
+      "control": "current_limit",
+      "value": 0.5
+    },
+    {
+      "role": "load",
+      "control": "current",
+      "value": 0.1
+    }
+  ],
+  "before_point": [],
+  "outputs": [
+    "supply",
+    "load"
+  ],
+  "limits": {
+    "supply": {
+      "voltage": 12,
+      "current": 0.5
+    },
+    "load": {
+      "voltage": 5.5,
+      "current": 0.1
+    }
+  },
+  "acquisition": {
+    "settle_s": 1,
+    "samples": 3,
+    "repeat": 1,
+    "capture_all": false,
+    "on_invalid": "fail"
+  },
+  "measurements": {
+    "input_voltage_v": {
+      "label": "Input voltage",
+      "unit": "V",
+      "role": "supply",
+      "quantity": "voltage",
+      "required": true
+    },
+    "input_current_a": {
+      "label": "Input current",
+      "unit": "A",
+      "role": "supply",
+      "quantity": "current",
+      "required": true
+    },
+    "output_voltage_v": {
+      "label": "Output voltage",
+      "unit": "V",
+      "role": "load",
+      "quantity": "voltage",
+      "required": true
+    },
+    "output_current_a": {
+      "label": "Output current",
+      "unit": "A",
+      "role": "load",
+      "quantity": "current",
+      "required": true
+    }
+  },
+  "derived": {
+    "input_power_w": {
+      "label": "Input power",
+      "unit": "W",
+      "expression": "input_voltage_v * input_current_a",
+      "aggregate": "sample_mean"
+    }
+  },
+  "checks": [
+    {
+      "stage": "sample",
+      "expression": "input_current_a <= 0.5",
+      "message": "Input current exceeded 0.5 A"
+    }
+  ],
+  "plots": [
+    {
+      "kind": "line",
+      "data": "points",
+      "x": "command_v",
+      "y": "output_voltage_v",
+      "title": "Output voltage versus input voltage"
+    }
+  ],
+  "table": {
+    "data": "points",
+    "columns": [
+      "command_v",
+      "input_voltage_v",
+      "input_current_a",
+      "output_voltage_v",
+      "output_current_a",
+      "input_power_w",
+      "quality"
+    ]
+  }
+}

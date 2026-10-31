@@ -44,7 +44,13 @@ This test assumes an experiment equipment role named `bias`, assigned to a verif
 }
 ```
 
-Paste a specification into **Parameters → Edit Test JSON…** for an existing test. In **New Experiment → Tests**, a template selector and JSON editor define each new test. Equipment role identifiers are shown in the creation form; use those identifiers in the JSON. The separate Description field supplies the narrative when non-empty. No running test is modified: saving changes the experiment definition, and each started run retains its own specification snapshot.
+Use **Parameters → Edit Test…** to open the GUI test builder for an existing test, or **New Experiment → Tests** to build one from a template. **Testing** contains parameters, sweep axes, controls, operating limits, acquisition, measurements, formulas, checks and reductions. **Output visualization** separately contains plots, table columns and result notes. Use the sidebar to move through adjustable inputs, sweeps, equipment controls, measurements, calculations and stop conditions. Open a card to edit it; its heading summarizes the current settings. New entries have sensible starting values and unique formula names. Choose a sweep mode or measurement source from a single selector, and select equipment/results by name. Use Add/Remove and the arrow buttons to manage entries; Undo removal restores the last removed entry. Less common settings are under More options. Use Check test to validate the definition before saving. The chart layout preview shows axis labels; measurement data appears after a run. Formula names must be unique. Enter expressions directly, without JSON quotes, for example `start_v + 1`.
+
+**Advanced JSON** supports existing specifications: paste JSON and click **Load JSON into builder** before saving. **Refresh JSON from builder** copies form edits into the JSON editor. Unapplied JSON blocks saving so edits cannot be silently discarded. Equipment role identifiers are shown in the creation form. The separate Description field in New Experiment supplies the narrative when non-empty.
+
+The split is in the editor: execution and visualization remain in one schema-version-1 JSON document for compatibility with existing API clients, templates and saved runs. Saving still uses the full reference/expression/dataset validator. No running test is modified: saving changes the experiment definition, and each started run retains its own specification snapshot.
+
+For a complete example using the forms, see the [screenshotted voltage sweep walkthrough](voltage-sweep-guide.md).
 
 ## Fields and execution order
 

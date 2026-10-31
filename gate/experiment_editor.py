@@ -1,6 +1,5 @@
 """Structured GTK experiment creation, independent of physical instruments."""
 import copy
-import json
 import re
 import uuid
 import gi
@@ -8,6 +7,7 @@ gi.require_version('Gtk', '4.0')
 from gi.repository import Gtk
 from gate.experiments import BUCK_CONVERTER, validate_definition
 from gate.procedures import PROCEDURES, test_spec, load_template
+from gate.test_builder import TestBuilder
 
 CAPABILITIES = {
     'measure.temperature': 'Temperature measurements',
@@ -196,14 +196,10 @@ class ExperimentEditor(Gtk.Dialog):
         scroll.add_css_class('frame')
         scroll.set_child(item['description'])
         item['box'].append(scroll)
-        item['box'].append(self.owner.label('JSON test specification', 'device-title'))
-        item['box'].append(self.owner.label('Version 1 defines parameters, sweep axes, channels, formulas, checks and charts. Role references use the identifiers shown in Equipment.', 'dim-label'))
-        item['specification'] = Gtk.TextView(monospace=True, wrap_mode=Gtk.WrapMode.NONE, left_margin=8, top_margin=8)
-        item['specification'].get_buffer().set_text(json.dumps(spec or load_template('capture'), indent=2))
-        json_scroll = Gtk.ScrolledWindow(min_content_height=220)
-        json_scroll.add_css_class('frame')
-        json_scroll.set_child(item['specification'])
-        item['box'].append(json_scroll)
+        item['builder'] = TestBuilder(spec or load_template('capture'),
+            [role['key'].get_text().strip() for role in self.roles])
+        item['specification'] = item['builder'].raw
+        item['box'].append(item['builder'])
         def template_changed(picker):
             kind = picker.get_active_id()
             if kind == 'custom':
@@ -212,7 +208,7 @@ class ExperimentEditor(Gtk.Dialog):
                 roles = {role['key'].get_text().strip(): {'capabilities':[key for key, check in role['checks'].items() if check.get_active()]}
                          for role in self.roles}
                 template = load_template(kind, roles)
-                item['specification'].get_buffer().set_text(json.dumps(template, indent=2))
+                item['builder'].set_spec(template)
                 self.show_error('')
             except ValueError as exc:
                 self.show_error(str(exc))
@@ -257,10 +253,7 @@ class ExperimentEditor(Gtk.Dialog):
                 raise ValueError('Choose distinct test names.')
             buffer = test['description'].get_buffer()
             description = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False).strip()
-            buffer = test['specification'].get_buffer()
-            specification = json.loads(buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False))
-            if not isinstance(specification, dict):
-                raise ValueError('A test specification must be a JSON object')
+            specification = test['builder'].get_spec()
             if description:
                 specification['description'] = description
             tests[key] = specification
