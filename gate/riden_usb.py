@@ -32,11 +32,20 @@ def crc16(data):
     return struct.pack('<H', crc)
 
 
+class FrameError(ValueError):
+    """A garbled, truncated or misaligned reply: safe to retry an idempotent request."""
+
+
 class RidenUSB:
-    def __init__(self, resource, timeout=1.):
+    # Function 3 reads and function 6 absolute-value writes are idempotent, so a
+    # lost or corrupted reply is retried instead of failing the whole poll.
+    def __init__(self, resource, timeout=.5, attempts=3, quiet=.1):
         path, baud, self.address = connection(resource)
         self.resource = f'riden://{path}?baud={baud}&address={self.address}'
         self.timeout = timeout
+        self.attempts = attempts
+        self.quiet = quiet
+        self.retries = 0
         self.lock = threading.Lock()
         self.fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         self.ready_at = 0.
@@ -54,58 +63,81 @@ class RidenUSB:
 
     def _transaction(self, function, register, value):
         with self.lock:
-            if self.fd is None:
-                raise ConnectionError('Riden connection is closed')
-            time.sleep(max(0., self.ready_at-time.monotonic()))
-            termios.tcflush(self.fd, termios.TCIFLUSH)
-            request = struct.pack('>BBHH', self.address, function, register, value)
-            pending = request + crc16(request)
-            deadline = time.monotonic()+self.timeout
-            def transfer_ready(read=False):
-                remaining = deadline-time.monotonic()
-                if remaining <= 0 or not select.select([self.fd] if read else [], [] if read else [self.fd], [], max(0., remaining))[0 if read else 1]:
-                    raise TimeoutError('Riden Modbus transaction timed out')
+            for attempt in range(self.attempts):
+                if self.fd is None:
+                    raise ConnectionError('Riden connection is closed')
+                try:
+                    return self._attempt(function, register, value)
+                except (TimeoutError, FrameError):
+                    if attempt+1 == self.attempts:
+                        raise
+                    self.retries += 1
+                    self._drain()
+
+    def _drain(self):
+        """Discard late/partial replies until the line stays quiet (bounded)."""
+        deadline = time.monotonic()+self.timeout
+        while time.monotonic() < deadline:
+            if not select.select([self.fd], [], [], self.quiet)[0]:
+                break
             try:
-                while pending:
-                    transfer_ready()
-                    try:
-                        count = os.write(self.fd, pending)
-                    except BlockingIOError:
-                        continue
-                    if not count:
-                        raise ConnectionError('Riden USB disconnected')
-                    pending = pending[count:]
-                reply = b''
-                expected = 3
-                while len(reply) < expected:
-                    transfer_ready(True)
-                    try:
-                        block = os.read(self.fd, expected-len(reply))
-                    except BlockingIOError:
-                        continue
-                    if not block:
-                        raise ConnectionError('Riden USB disconnected')
-                    reply += block
-                    if len(reply) >= 3:
-                        expected = 5 if reply[1] & 0x80 else 8 if function == 6 else 5+reply[2]
-                        if expected > 255:
-                            raise ValueError('Invalid Modbus frame size')
-                if crc16(reply[:-2]) != reply[-2:]:
-                    raise ValueError('Riden Modbus CRC mismatch')
-                if reply[0] != self.address or reply[1] not in (function, function | 0x80):
-                    raise ValueError('Unexpected Modbus address/function')
-                if reply[1] & 0x80:
-                    raise ValueError(f'Riden Modbus exception {reply[2]}')
-                if function == 6:
-                    if reply[:-2] != request:
-                        raise ValueError('Riden write echo mismatch')
-                    return
-                if reply[2] != value*2:
-                    raise ValueError('Unexpected Modbus register count')
-                return list(struct.unpack('>'+str(value)+'H', reply[3:-2]))
-            finally:
-                # Allow late replies to finish before flushing the next request.
-                self.ready_at = time.monotonic()+.05
+                if not os.read(self.fd, 256):
+                    raise ConnectionError('Riden USB disconnected')
+            except BlockingIOError:
+                pass
+        self.ready_at = time.monotonic()
+
+    def _attempt(self, function, register, value):
+        time.sleep(max(0., self.ready_at-time.monotonic()))
+        termios.tcflush(self.fd, termios.TCIFLUSH)
+        request = struct.pack('>BBHH', self.address, function, register, value)
+        pending = request + crc16(request)
+        deadline = time.monotonic()+self.timeout
+        def transfer_ready(read=False):
+            remaining = deadline-time.monotonic()
+            if remaining <= 0 or not select.select([self.fd] if read else [], [] if read else [self.fd], [], max(0., remaining))[0 if read else 1]:
+                raise TimeoutError('Riden Modbus transaction timed out')
+        try:
+            while pending:
+                transfer_ready()
+                try:
+                    count = os.write(self.fd, pending)
+                except BlockingIOError:
+                    continue
+                if not count:
+                    raise ConnectionError('Riden USB disconnected')
+                pending = pending[count:]
+            reply = b''
+            expected = 3
+            while len(reply) < expected:
+                transfer_ready(True)
+                try:
+                    block = os.read(self.fd, expected-len(reply))
+                except BlockingIOError:
+                    continue
+                if not block:
+                    raise ConnectionError('Riden USB disconnected')
+                reply += block
+                if len(reply) >= 3:
+                    expected = 5 if reply[1] & 0x80 else 8 if function == 6 else 5+reply[2]
+                    if expected > 255:
+                        raise FrameError('Invalid Modbus frame size')
+            if crc16(reply[:-2]) != reply[-2:]:
+                raise FrameError('Riden Modbus CRC mismatch')
+            if reply[0] != self.address or reply[1] not in (function, function | 0x80):
+                raise FrameError('Unexpected Modbus address/function')
+            if reply[1] & 0x80:
+                raise ValueError(f'Riden Modbus exception {reply[2]}')
+            if function == 6:
+                if reply[:-2] != request:
+                    raise ValueError('Riden write echo mismatch')
+                return
+            if reply[2] != value*2:
+                raise FrameError('Unexpected Modbus register count')
+            return list(struct.unpack('>'+str(value)+'H', reply[3:-2]))
+        finally:
+            # Allow late replies to finish before flushing the next request.
+            self.ready_at = time.monotonic()+.05
 
     def read_registers(self, register, count):
         if not 0 <= register <= 65535 or not 1 <= count <= 125 or register+count > 65536:
