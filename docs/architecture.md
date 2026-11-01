@@ -55,7 +55,7 @@ The panel polls cached state, retains draft entries and waits for command result
 It does not replay output settings or enable state. Source setpoints and input
 measurements are excluded from calculated output power.
 
-The standalone output API accepts simulations and drivers explicitly declaring `output_control_supported`. The [RD6006](riden.md) uses a separate bounded binary Modbus USB serial transport, model-specific limits, confirmed setpoint/output writes and explicit wiring confirmation before enable. Experiment controls separately require typed methods and operating envelopes. No generic SCPI supply commands are inferred. Static changes have no additional slew limiting; sweeps apply explicit steps/dwell.
+The standalone output API accepts simulations and drivers explicitly declaring `output_control_supported`. The [RD6006](riden.md) uses a separate bounded binary Modbus USB serial transport, model-specific limits, confirmed setpoint/output writes and explicit output confirmation before enable. The manual output panel confirms the operator’s Enable click; experiment output and wiring confirmations remain separate. Experiment controls separately require typed methods and operating envelopes. No generic SCPI supply commands are inferred. Static changes have no additional slew limiting; sweeps apply explicit steps/dwell.
 
 Examples with a running demo service:
 

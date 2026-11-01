@@ -129,7 +129,9 @@ api.command('source', instrument=device_id,
 Enable requires a successfully configured setpoint in the current connection and
 unchanged confirmed range/setpoint. Front-panel changes can cause refusal.
 Scaling, saturation and out-of-limit output states block PJ enabling. Real enable
-retains the API's explicit `wiring_confirmed=true` requirement. `OPER`/`STBY`
+requires explicit `wiring_confirmed=true` or `operator_confirmed=true` through the API.
+The standalone panel sends operator confirmation on an Enable click, without a
+wiring checkbox; experiments retain their wiring checks. `OPER`/`STBY`
 are confirmed through status readback; **standby means zero output, not electrical
 isolation**. A connection that attempted to enable output owns a verified STBY
 attempt on normal cleanup, including after a lost enable acknowledgement. A

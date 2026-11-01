@@ -111,9 +111,6 @@ class OutputWindow(Gtk.ApplicationWindow):
         output.set_margin_top(14)
         output.set_margin_bottom(18)
         layout.append(output)
-        self.wiring = Gtk.CheckButton(label='I have checked wiring and DUT operating limits')
-        output.append(self.wiring)
-        self.wiring.connect('toggled', lambda *_: self.update_sensitivity())
         self.toggle = Gtk.Button(label='Enable output', css_classes=['output-button', 'suggested-action'])
         self.toggle.connect('clicked', lambda *_: self.toggle_output())
         output.append(self.toggle)
@@ -172,9 +169,8 @@ class OutputWindow(Gtk.ApplicationWindow):
         enabled = valid_reading(self.card or {}, self.enabled_key)
         if enabled == 1:
             self.send('output', enabled=False)
-        elif enabled == 0 and (self.card.get('simulated') or self.wiring.get_active()):
-            self.send('output', enabled=True, wiring_confirmed=self.wiring.get_active())
-            self.wiring.set_active(False)
+        elif enabled == 0:
+            self.send('output', enabled=True, operator_confirmed=True)
 
     def build_controls(self, config, sources):
         child = self.controls.get_first_child()
@@ -320,7 +316,6 @@ class OutputWindow(Gtk.ApplicationWindow):
                 self.pending = None
                 self.status.set_text('Instrument confirmed the change' if result['state'] == 'succeeded' else result.get('error', 'Change failed'))
         if not self.card:
-            self.wiring.set_active(False)
             self.state_label.set_text('OFFLINE')
             self.status.set_text('Instrument disconnected · output state unknown')
             self.clear_readback()
@@ -387,7 +382,6 @@ class OutputWindow(Gtk.ApplicationWindow):
         self.spinner.set_spinning(bool(self.pending))
         self.spinner.set_visible(bool(self.pending))
         enabled = valid_reading(self.card or {}, getattr(self, 'enabled_key', 'output_enabled'))
-        self.wiring.set_visible(not bool((self.card or {}).get('simulated')) and enabled != 1)
         self.toggle.set_label('Disable output' if enabled == 1 else 'Enable output')
         if enabled == 1:
             self.toggle.add_css_class('destructive-action')
@@ -395,9 +389,7 @@ class OutputWindow(Gtk.ApplicationWindow):
         else:
             self.toggle.remove_css_class('destructive-action')
             self.toggle.add_css_class('suggested-action')
-        self.toggle.set_sensitive(available and enabled in (0, 1) and
-                                  (enabled == 1 or self.card.get('simulated') or self.wiring.get_active()))
-        self.wiring.set_sensitive(available and enabled == 0)
+        self.toggle.set_sensitive(available and enabled in (0, 1))
 
     def refresh(self):
         if self.closed or self.polling:
@@ -407,7 +399,6 @@ class OutputWindow(Gtk.ApplicationWindow):
             self.polling = False
             if error:
                 self.pending = None
-                self.wiring.set_active(False)
                 self.available = False
                 self.card = None
                 self.state_label.set_text('OFFLINE')
