@@ -77,9 +77,23 @@ Output enable, setpoints and sweeps are never restored on reconnect. Loss of
 USB or process termination can prevent cleanup; check the front panel.
 Raw SCPI query/write actions are unavailable for this binary transport.
 
+## Transport retries
+
+The RD6006 occasionally ignores a valid request and sends no reply at all
+(bench: 5 of 6,098 transactions, ~1 in 1,200, with nothing arriving late).
+Because any acquisition error disconnects an instrument, each Modbus transaction
+makes up to three attempts with a 0.5 s reply timeout. Only lost, truncated or
+garbled replies are retried (timeout, CRC, frame size, address/function or
+register-count errors). Before each retry, input is drained until the line is
+quiet, so a late reply cannot be parsed as the next frame. Function 3 reads and
+function 6 absolute-value writes are idempotent; written values are still
+confirmed by readback. Modbus exception replies, write-echo mismatches and
+disconnects fail immediately. The worst case before a persistent failure is
+reported is about 3 s. Observed reply latency was 51–113 ms.
+
 ## Verification and references
 
-Protocol fixtures exercise fragmented serial frames, CRC, exception replies,
+Protocol fixtures exercise fragmented serial frames, CRC, exception replies, recovery from lost, corrupt, truncated and late replies,
 timeouts, write echo/readback mismatch, scaling, model rejection, bounds,
 enable interlocks and cleanup after a lost acknowledgement.
 On 2026-11-01, the attached RD6006 identified as firmware 1.25, serial 4684;
@@ -98,6 +112,18 @@ regulation under load, full-range accuracy, protection trips and endurance were
 not bench-tested. These are functional comparisons, not calibration.
 Sweep completion was awaited explicitly: the shared polling cycle can extend
 requested dwell times. Historical wiring/paths do not establish current bench state.
+
+### Connection endurance
+
+On 2026-11-01 (same instrument, output into the Fluke 45 at a 50 mA limit) a
+25-minute mixed run with the previous single-attempt transport saw 5 timeouts
+in 6,098 transactions. Each would have dropped the instrument from GATE, and one
+did in the running service. The same run with retries completed about 6,500
+transactions: 3 attempts were lost (one setpoint write, two reads) and all
+recovered on retry. There were no unrecovered errors. All 148 interleaved
+setpoint/enable checks from 1 V to 12 V agreed with the Fluke within 0.02 V
++ 0.5 %. These tests drove the driver directly, not through the service's
+acquisition owner.
 
 References:
 [RD6006 product specifications](https://joy-it.net/en/products/JT-RD6006),

@@ -1,13 +1,15 @@
 import os
 import pty
+import select
 import threading
+import time
 import unittest
 from unittest.mock import Mock, patch
 
 from gate.connections import communication_type, validate_resource
 from gate.drivers.riden import RidenRD6006
 from gate.engine import Engine
-from gate.riden_usb import RidenUSB, crc16
+from gate.riden_usb import FrameError, RidenUSB, crc16
 
 
 class Registers:
@@ -123,41 +125,81 @@ class DriverTests(unittest.TestCase):
 
 
 class TransportTests(unittest.TestCase):
-    def exchange(self, response, operation=None):
+    def exchange(self, response, operation=None, **options):
+        """Serve every request (including retries) from response(request, index)."""
         master, slave = pty.openpty()
-        transport = RidenUSB('riden://'+os.ttyname(slave), timeout=.15)
+        transport = RidenUSB('riden://'+os.ttyname(slave), **dict(dict(timeout=.15, quiet=.02), **options))
         requests = []
+        stop = threading.Event()
         def server():
             request = b''
-            while len(request) < 8: request += os.read(master, 8-len(request))
-            requests.append(request)
-            reply = response(request)
-            if reply:
-                for byte in reply: os.write(master, bytes([byte]))
+            while not stop.is_set():
+                if not select.select([master], [], [], .02)[0]:
+                    continue
+                request += os.read(master, 8-len(request))
+                if len(request) < 8:
+                    continue
+                requests.append(request)
+                reply = response(request, len(requests)-1)
+                request = b''
+                if reply:
+                    for byte in reply: os.write(master, bytes([byte]))
         thread = threading.Thread(target=server); thread.start()
         try:
+            self.transport = transport
             return (operation or (lambda t: t.read_registers(8, 2)))(transport)
         finally:
-            thread.join(timeout=1)
+            stop.set(); thread.join(timeout=1)
             transport.close(); os.close(master); os.close(slave)
             self.assertFalse(thread.is_alive())
-            self.assertEqual(requests[0][-2:], crc16(requests[0][:-2]))
+            self.requests = requests
+            self.assertTrue(all(r[-2:] == crc16(r[:-2]) for r in requests))
 
     def test_crc_and_fragmented_read_write(self):
         self.assertEqual(crc16(bytes.fromhex('010300000004')), bytes.fromhex('4409'))
         body = bytes.fromhex('010304014a0032')
-        self.assertEqual(self.exchange(lambda _: body+crc16(body)), [330, 50])
-        self.exchange(lambda request: request, lambda t: t.write_register(18, 0))
+        self.assertEqual(self.exchange(lambda *_: body+crc16(body)), [330, 50])
+        self.assertEqual(len(self.requests), 1)
+        self.exchange(lambda request, _: request, lambda t: t.write_register(18, 0))
 
-    def test_bad_frames_exceptions_timeout_and_wrong_echo(self):
-        for body, error in ((bytes.fromhex('018302'), 'exception'),
-                            (bytes.fromhex('02030400010002'), 'address/function'),
+    def test_persistent_bad_frames_exceptions_timeout_and_wrong_echo(self):
+        for body, error in ((bytes.fromhex('02030400010002'), 'address/function'),
                             (bytes.fromhex('0103020001'), 'register count')):
-            with self.assertRaisesRegex(ValueError, error):
-                self.exchange(lambda _, b=body: b+crc16(b))
-        with self.assertRaisesRegex(ValueError, 'CRC'):
-            self.exchange(lambda _: bytes.fromhex('010304000100020000'))
-        with self.assertRaises(TimeoutError): self.exchange(lambda _: b'')
+            with self.assertRaisesRegex(FrameError, error):
+                self.exchange(lambda *_, b=body: b+crc16(b))
+            self.assertEqual(len(self.requests), 3)
+        with self.assertRaisesRegex(FrameError, 'CRC'):
+            self.exchange(lambda *_: bytes.fromhex('010304000100020000'))
+        with self.assertRaises(TimeoutError): self.exchange(lambda *_: b'')
+        self.assertEqual(len(self.requests), 3)
+        # Device-reported exceptions and wrong write echoes are definitive: no retry.
+        body = bytes.fromhex('018302')
+        with self.assertRaisesRegex(ValueError, 'exception'):
+            self.exchange(lambda *_: body+crc16(body))
+        self.assertEqual(len(self.requests), 1)
         body = bytes.fromhex('010600120001')
         with self.assertRaisesRegex(ValueError, 'echo'):
-            self.exchange(lambda _: body+crc16(body), lambda t: t.write_register(18, 0))
+            self.exchange(lambda *_: body+crc16(body), lambda t: t.write_register(18, 0))
+        self.assertEqual(len(self.requests), 1)
+
+    def test_transient_lost_corrupt_and_late_replies_recover(self):
+        good = bytes.fromhex('010304014a0032'); good += crc16(good)
+        # Lost reply, then success.
+        self.assertEqual(self.exchange(lambda _, i: b'' if i == 0 else good), [330, 50])
+        self.assertEqual((len(self.requests), self.transport.retries), (2, 1))
+        # Corrupted CRC, then success.
+        self.assertEqual(self.exchange(lambda _, i: good[:-1]+b'\x00' if i == 0 else good), [330, 50])
+        self.assertEqual(len(self.requests), 2)
+        # Truncated reply whose tail never arrives, then success.
+        self.assertEqual(self.exchange(lambda _, i: good[:4] if i == 0 else good), [330, 50])
+        # A reply arriving after the timeout is drained, not parsed as the next frame.
+        def late(_, i):
+            if i == 0:
+                time.sleep(.2)
+                return bytes.fromhex('0103040001000209')
+            return good
+        self.assertEqual(self.exchange(late), [330, 50])
+        # Writes are idempotent absolute values and are retried after a lost echo.
+        self.exchange(lambda request, i: b'' if i == 0 else request, lambda t: t.write_register(18, 1))
+        self.assertEqual(len(self.requests), 2)
+        self.assertEqual(self.requests[0], self.requests[1])
