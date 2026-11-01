@@ -82,6 +82,21 @@ try:
             aoip_address = 'aoip:///dev/serial/by-id/fixture?baud=19200&bits=7&parity=even&stop=2&flow=xonxoff&idle=0.4'
             read_aoip = window.connection_fields('Serial', aoip_address, aoip_fields)
             assert read_aoip() == aoip_address, 'AOIP connection edits must preserve protocol and framing'
+            plp_fields = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            plp_address = 'plp:///dev/ttyACM9?baud=9600'
+            read_plp = window.connection_fields('Serial', plp_address, plp_fields)
+            assert read_plp() == plp_address, 'PL-P connection edits must preserve protocol'
+            child = plp_fields.get_first_child()
+            dropdowns = []
+            while child:
+                if isinstance(child, Gtk.DropDown): dropdowns.append(child)
+                child = child.get_next_sibling()
+            assert not dropdowns[0].get_sensitive(), 'PL-P baud is fixed'
+            dropdowns[1].set_selected(1)
+            assert dropdowns[0].get_sensitive(), 'Other serial protocols retain baud selection'
+            dropdowns[0].set_selected(6)
+            dropdowns[1].set_selected(2)
+            assert read_plp() == plp_address, 'Selecting PL-P must reset baud to 9600'
             dialog = window.edit_connection('Serial', 'serial:///dev/ttyUSB9?baud=9600')
             dialogs.append(dialog)
             entry = dialog.get_content_area().get_first_child().get_next_sibling()

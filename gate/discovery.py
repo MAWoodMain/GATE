@@ -9,11 +9,13 @@ from gate.serial import FlukeSerial
 from gate.aoip_serial import AOIPSerial
 from gate.drivers.aoip import AOIPSN8310, AOIPPJ6301
 from gate.transport import SCPI
+from gate.plp_serial import PLPSerial
+from gate.drivers.tti_plp import TTiPLP
 from gate.hantek_usb import HantekUSB, resources as hantek_resources
 from gate.drivers.hantek365 import Hantek365
 
 def driver_types():
-    drivers = [SiglentSDS, Fluke45, Hantek365, Keysight344xxA, RidenRD6006, AOIPSN8310, AOIPPJ6301]
+    drivers = [SiglentSDS, Fluke45, Hantek365, Keysight344xxA, RidenRD6006, TTiPLP, AOIPSN8310, AOIPPJ6301]
     for entry in entry_points(group="gate.drivers"):
         cls = entry.load()
         if cls not in drivers:
@@ -49,7 +51,8 @@ def connect(resource):
         except Exception:
             transport.close()
             raise
-    transport = (AOIPSerial(resource) if resource.startswith("aoip://") else
+    transport = (PLPSerial(resource) if resource.startswith("plp://") else
+                 AOIPSerial(resource) if resource.startswith("aoip://") else
                  FlukeSerial(resource) if resource.startswith("serial://") else SCPI(resource))
     try:
         identity = transport.query("*IDN?")

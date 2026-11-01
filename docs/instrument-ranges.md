@@ -132,6 +132,7 @@ hardware changes accepted before a later failure are not transactional.
 | Hantek 365 | Explicitly unavailable: independent manual range selection is not verified for the USB protocol. Existing function and mA/A-terminal selection remain available. |
 | Simulated multimeter | Autorange and 0.1/1/10/100 V; insufficient fixed range produces overload. |
 | AOIP PJ-6301 | Input voltage and resistance manual/Auto ranges and fixed current range, preserving stored wiring/sensor settings. Source ranges use the separate standby-only `source` action. SN-8310 exposes source only. See [AOIP](aoip.md). |
+| TTi New PL-P | Empty catalog; existing low/high current range is preserved. Single-output current-limit writes enforce that selected range; output ratings are separate from measurement ranges. |
 | Other simulations | Empty catalog with fixed-range explanation. Output operating envelopes remain separate. |
 
 The new controls are protocol-fixture tested, not bench-verified. Hardware

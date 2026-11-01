@@ -90,7 +90,7 @@ when disabled. Examples and constraints follow below or in the linked contracts.
 | `record`, `stop_recording` | Start ordinary all-device logging at `path`, or stop it |
 | `source` | AOIP calibrators: `instrument`, `quantity` (`voltage`/`current`, PJ also `resistance`), SI `value`, explicit `range` from cached `source_controls`; requires standby, never enables output |
 | `configure_output` | `instrument`, driver-declared `control` (`voltage`, `current_limit`, optional `priority`, `ovp`, `ocp`), typed `value`; validates against cached `output_configuration.controls`, confirmed setter on acquisition owner, cancels an active sweep, never enables output |
-| `static`, `sweep`, `output`, `cancel_sweep` | Demo PSU/RD6006: `instrument`, `voltage`, optional `current_limit` on supported drivers; sweep `start`/`stop`/`step`/`dwell`; output `enabled` (also AOIP calibrators), real enable requires `wiring_confirmed=true` or explicit manual `operator_confirmed=true` |
+| `static`, `sweep`, `output`, `cancel_sweep` | Demo PSU/RD6006/single-output PL-P: `instrument`, `voltage`, optional `current_limit` on supported drivers; sweep `start`/`stop`/`step`/`dwell`; output `enabled` (also AOIP calibrators), real enable requires `wiring_confirmed=true` or explicit manual `operator_confirmed=true` |
 | `query`, `write` | `instrument` and one model-specific `command`; requires HTTP raw access enabled |
 | `save_experiment`, `delete_experiment`, `check_experiment` | Save a definition object as `experiment`; delete/check by experiment ID, with `bindings` for checking |
 | `start_experiment`, `start_experiment_sequence`, `cancel_experiment` | Start a `test` with `parameters`, or an ordered `tests` list; both use `experiment`/`bindings` and explicit output/wiring confirmations where required; cancel stops the active sequence as well as its test |
@@ -138,7 +138,7 @@ replies even without CR/LF, within a 3-second transaction deadline. See the
 [AOIP setup, channel and source-control contract](docs/aoip.md).
 PJ `measure.*` input readings are independent from `source.*` setpoints; the SN
 exposes source only because its manual provides no independent measurement query.
-`output_configuration` is a passive, driver-declared catalog for the pop-out output panel (`gate gui --output INSTRUMENT_ID`). `enabled_reading`, optional `voltage_reading` and `current_reading` name explicit output reading keys. `controls` maps IDs to `label`, `unit`, `min`, `max`, `step` and optional confirmed `reading`. A priority control declares `choices: ["voltage", "current"]` and publishes its confirmed choice in `output_settings.priority`. Driver setters must confirm changes before returning. Only declared controls may be configured; absence does not imply safe bounds or model support. Numeric controls without a reading key may publish confirmed values under the same key in `output_settings`. RD6006 controls are voltage and current limit; the demo PSU additionally implements priority and OVP/OCP thresholds (its ideal resistive load has the same steady-state envelope for both priorities). Priority and OVP/OCP configuration remain unavailable on current real drivers. RD6006 protection trips and CV/CC regulation are observations, not priority settings. AOIP uses the existing `source` action and keeps source setpoints separate from output measurements. No control or enable state is saved/replayed by the output panel. Calculated power requires fresh, quality-ok voltage/current output readings in V/A, and is unavailable on AOIP.
+`output_configuration` is a passive, driver-declared catalog for the pop-out output panel (`gate gui --output INSTRUMENT_ID`). `enabled_reading`, optional `voltage_reading` and `current_reading` name explicit output reading keys. `controls` maps IDs to `label`, `unit`, `min`, `max`, `step` and optional confirmed `reading`. A priority control declares `choices: ["voltage", "current"]` and publishes its confirmed choice in `output_settings.priority`. Driver setters must confirm changes before returning. Only declared controls may be configured; absence does not imply safe bounds or model support. Numeric controls without a reading key may publish confirmed values under the same key in `output_settings`. RD6006 and single-output PL-P controls are voltage and current limit; the demo PSU additionally implements priority and OVP/OCP thresholds (its ideal resistive load has the same steady-state envelope for both priorities). Priority and OVP/OCP configuration remain unavailable on current real drivers. RD6006 protection trips and CV/CC regulation are observations, not priority settings. AOIP uses the existing `source` action and keeps source setpoints separate from output measurements. No control or enable state is saved/replayed by the output panel. Calculated power requires fresh, quality-ok voltage/current output readings in V/A, and is unavailable on AOIP.
 
 `source_controls` maps quantity/range IDs to `[min, max, resolution]` in SI units.
 Use `source` in standby, then separate `output(enabled=true,
@@ -146,6 +146,19 @@ wiring_confirmed=true)`. Enable requires a freshly configured, confirmed source
 in this connection; reconnect never restores it. STBY is zero output, not
 isolation. Generic PSU sweeps/compliance and experiment output controls are not
 implemented for these calibrators. PJ TXP loop supply selection is excluded.
+
+TTi New PL-P support is protocol-tested, not bench-verified. Use
+`tcp://HOST:9221` or `plp:///dev/ttyACM0?baud=9600` (USB virtual COM/RS-232,
+fixed 9600 8N1, XON/XOFF); add serial connections with the TTi PL-P protocol.
+PL068-P/PL155-P/PL303-P/PL601-P provide typed static/sweep/output and experiment
+controls, with model-specific limits and confirmed readback. Current limit is
+at least 0.001 A and must fit the existing low/high range; no range is changed.
+Protection thresholds and modes are preserved. Rear-panel analogue CV/CC switches
+must be Local for digital control; GATE cannot verify their positions. Remote
+traffic locks front-panel controls and cancels S-Lock/V-Span. PL303QMD-P/QMT-P
+provide acquisition only, with `outputN.*` reading/function keys and independent
+channel ownership. In parallel mode output 2 is null/unavailable. No multi-output
+control or raw commands are exposed. See [PL-P setup and limits](docs/tti-plp.md).
 
 ## Connect and manage instruments
 
@@ -344,7 +357,7 @@ CSV includes samples and derived UTC tick times. Event details remain in SQLite.
 
 ## Output controls
 
-Typed static/sweep/output control supports the demo PSU and [Riden RD6006 over USB](docs/riden.md). Inspect `output_control_supported`, `experiment_limits` and current readings before issuing an output request. RD6006 USB addresses use `riden:///dev/ttyUSB1?baud=115200&address=1`; add manually under USB, since Scan does not probe serial adapters.
+Typed static/sweep/output control supports the demo PSU, [Riden RD6006 over USB](docs/riden.md) and [single-output TTi New PL-P](docs/tti-plp.md). Inspect `output_control_supported`, `experiment_limits` and current readings before issuing an output request. RD6006 USB addresses use `riden:///dev/ttyUSB1?baud=115200&address=1`; add manually under USB, since Scan does not probe serial adapters.
 
 For RD6006, `static` accepts `voltage` and optional `current_limit` (amperes). Real output enable requires `enabled=true` and either `wiring_confirmed=true` or `operator_confirmed=true`. The standalone panel sends `operator_confirmed=true` when the user clicks **Enable output**, without asserting that wiring was checked. Experiments still require their separate `enable_outputs` and `wiring_confirmed` flags. Disable needs only `enabled=false`. Driver bounds are 0–60 V and 0.001–6 A current limit, with confirmed register writes. Keep DUT limits separate. The RD6006 supports typed experiment voltage/current-limit controls; other Riden models and raw SCPI are unsupported. No enable state is replayed, and GATE attempts a verified disable on close for outputs it enabled.
 
@@ -455,7 +468,7 @@ run or sequence. Disconnect/forget/connection editing first cancels the active
 execution. Changing saved definitions does not mutate a running snapshot. Output
 tests attempt verified output disable on completion, failure, cancellation and
 graceful shutdown; communications loss, forced termination or power failure can
-prevent it. RD6006 typed PSU controls are protocol-tested and low-voltage bench-verified; real electronic-load drivers remain unavailable. See [RD6006 verification status](docs/riden.md).
+prevent it. RD6006 typed PSU controls are protocol-tested and low-voltage bench-verified; single-output PL-P controls are protocol-tested with bench verification pending; real electronic-load drivers remain unavailable. See [RD6006 verification status](docs/riden.md).
 
 Existing experiment JSON needs no migration for the channel/range interface:
 its scalar `channel` still identifies a **reading key**, not an instrument channel
