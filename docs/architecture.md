@@ -45,6 +45,16 @@ class Meter:
 
 Discovery probes Linux USBTMC resources or a user-supplied TCP/Fluke/AOIP serial endpoint with `*IDN?`; it never sends resets. Third-party drivers are trusted Python code. They must bound I/O, validate units/values, preserve instrument settings during reads, and match only hardware they implement. Driver loading errors appear in connection status.
 
+The top-bar output launcher opens `gate.output_window` in an independent GTK
+window. Its passive `output_configuration` catalog declares explicit output
+reading keys and typed controls. `configure_output` validates each value against
+that catalog and invokes a driver setter on the acquisition owner; setters must
+confirm hardware changes before returning. Priority and protection controls are
+optional and are never inferred from CV/CC or protection-trip observations.
+The panel polls cached state, retains draft entries and waits for command results.
+It does not replay output settings or enable state. Source setpoints and input
+measurements are excluded from calculated output power.
+
 The standalone output API accepts simulations and drivers explicitly declaring `output_control_supported`. The [RD6006](riden.md) uses a separate bounded binary Modbus USB serial transport, model-specific limits, confirmed setpoint/output writes and explicit wiring confirmation before enable. Experiment controls separately require typed methods and operating envelopes. No generic SCPI supply commands are inferred. Static changes have no additional slew limiting; sweeps apply explicit steps/dwell.
 
 Examples with a running demo service:

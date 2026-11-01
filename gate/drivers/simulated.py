@@ -15,6 +15,17 @@ class Simulated:
         self.voltage = 0.0
         self.enabled = False
         self.selected_range = 'auto'
+        self.current_limit = 1.
+        if category == 'power_supply':
+            self.output_settings = dict(priority='voltage', ovp=30., ocp=3.)
+            self.output_configuration = dict(
+                enabled_reading='output_enabled', voltage_reading='voltage', current_reading='current',
+                controls=dict(
+                    voltage=dict(label='Output voltage', unit='V', min=0., max=30., step=.01, reading='set_voltage'),
+                    current_limit=dict(label='Current limit', unit='A', min=.001, max=3., step=.001, reading='current_limit'),
+                    priority=dict(label='Voltage/current priority', choices=['voltage', 'current']),
+                    ovp=dict(label='Overvoltage protection (OVP)', unit='V', min=.01, max=30., step=.01),
+                    ocp=dict(label='Overcurrent protection (OCP)', unit='A', min=.001, max=3., step=.001)))
 
     range_unavailable_reason = 'This simulated instrument has fixed measurement ranges.'
 
@@ -29,7 +40,7 @@ class Simulated:
         channels = {
             'multimeter': [('voltage_dc', 'DC voltage', 'V')],
             'power_supply': [('set_voltage', 'Voltage setpoint', 'V'), ('output_enabled', 'Output enabled', ''),
-                             ('voltage', 'Voltage', 'V'), ('current', 'Current', 'A')],
+                             ('voltage', 'Voltage', 'V'), ('current', 'Current', 'A'), ('current_limit', 'Current limit', 'A')],
             'oscilloscope': [('C1.PKPK', 'C1 · Peak-to-peak', 'V'), ('C1.FREQ', 'C1 · Frequency', 'Hz')],
         }
         owner = 'C1' if self.category == 'oscilloscope' else 'output' if self.category == 'power_supply' else 'primary'
@@ -39,10 +50,14 @@ class Simulated:
     def read(self):
         wobble = math.sin(time.monotonic()) * 0.003
         if self.category == "power_supply":
+            # Ideal resistive load: either priority reaches the same V/I envelope.
+            if self.voltage > self.output_settings['ovp'] or min(self.voltage / 100, self.current_limit) > self.output_settings['ocp']:
+                self.enabled = False
             return [Reading("set_voltage", self.voltage, "V"),
                     Reading("output_enabled", float(self.enabled), ""),
-                    Reading("voltage", self.voltage + wobble if self.enabled else 0., "V"),
-                    Reading("current", self.voltage / 100 if self.enabled else 0., "A")]
+                    Reading("current_limit", self.current_limit, "A"),
+                    Reading("voltage", min(self.voltage + wobble, self.current_limit * 100) if self.enabled else 0., "V"),
+                    Reading("current", min(self.voltage / 100, self.current_limit) if self.enabled else 0., "A")]
         if self.category == "multimeter":
             value = 3.3 + wobble
             overload = self.selected_range != 'auto' and abs(value) > float(self.selected_range)
@@ -52,7 +67,29 @@ class Simulated:
         if self.category != "power_supply" or not math.isfinite(voltage) or not 0 <= voltage <= 30:
             raise ValueError("Demo PSU range: 0–30 V")
         self.voltage = voltage
+    def set_current_limit(self, value):
+        if not math.isfinite(value) or not .001 <= value <= 3.:
+            raise ValueError("Demo current limit: 0.001–3 A")
+        self.current_limit = value
+
+    def set_priority(self, value):
+        if value not in ('voltage', 'current'):
+            raise ValueError('Demo priority must be voltage or current')
+        self.output_settings['priority'] = value
+
+    def set_ovp(self, value):
+        if not math.isfinite(value) or not .01 <= value <= 30.:
+            raise ValueError('Demo OVP: 0.01–30 V')
+        self.output_settings['ovp'] = value
+
+    def set_ocp(self, value):
+        if not math.isfinite(value) or not .001 <= value <= 3.:
+            raise ValueError('Demo OCP: 0.001–3 A')
+        self.output_settings['ocp'] = value
+
     def set_enabled(self, enabled):
+        if enabled and (self.voltage > self.output_settings['ovp'] or min(self.voltage / 100, self.current_limit) > self.output_settings['ocp']):
+            raise ValueError('Demo OVP/OCP prevents output enable')
         self.enabled = bool(enabled)
     def close(self):
         self.enabled = False
@@ -88,6 +125,12 @@ class ConverterInstrument(Simulated):
         self.name = 'SIMULATED · Converter ' + ('supply' if category == 'power_supply' else 'load')
         self.current = 0.
         self.current_limit = 3.
+        if category == 'power_supply':
+            self.output_configuration = dict(
+                enabled_reading='output_enabled', voltage_reading='voltage', current_reading='current',
+                controls=dict(
+                    voltage=dict(label='Output voltage', unit='V', min=0., max=30., step=.01),
+                    current_limit=dict(label='Current limit', unit='A', min=.001, max=5., step=.001)))
         self.experiment_required_controls = ('voltage', 'current_limit') if category == 'power_supply' else ('current',)
         self.experiment_capabilities = ('measure.scalar', 'measure.dc_voltage', 'measure.dc_current',
             'source.dc_voltage' if category == 'power_supply' else 'sink.dc_current')
@@ -104,6 +147,10 @@ class ConverterInstrument(Simulated):
             voltage, current = (self.voltage if self.enabled else 0.), input_current
         return [Reading('voltage', voltage, 'V'), Reading('current', current, 'A'),
                 Reading('output_enabled', float(self.enabled), '')]
+
+    def set_enabled(self, enabled):
+        # This coupled bench has its own load/compliance model.
+        self.enabled = bool(enabled)
 
     def set_current(self, value):
         if self.category != 'electronic_load' or not math.isfinite(value) or not 0 <= value <= 5:

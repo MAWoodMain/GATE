@@ -58,6 +58,7 @@ class AOIPSource:
     category = 'calibrator'
     simulated = False
     output_control_supported = True
+    output_configuration = dict(enabled_reading='source.enabled', controls={})
     experiment_control_supported = False  # No generic PSU compliance/current-limit contract.
     experiment_capabilities = ()
     range_unavailable_reason = 'Source ranges are chosen explicitly with the source command while in standby.'

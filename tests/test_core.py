@@ -61,7 +61,7 @@ class CoreTests(unittest.TestCase):
             export_csv(path, str(path)+'.csv')
             with open(str(path)+'.csv') as stream:
                 rows = list(csv.DictReader(stream))
-                self.assertEqual(len(rows),14)
+                self.assertEqual(len(rows),16)  # Includes cached PSU current-limit readback.
                 self.assertIn('tick_utc_ns',rows[0])
 
     def test_sweep_boundaries_and_cancellation(self):
@@ -97,7 +97,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(cards[0]['readings'][0]['quality'],'error')
         self.assertEqual(cards[0]['readings'][0]['value'],None)
         self.assertNotIn('demo:multimeter',engine.instruments)
-        self.assertEqual(len(cards[1]['readings']),4)
+        self.assertEqual(len(cards[1]['readings']),5)
 
     def test_scpi_fragmentation_and_real_driver_queries(self):
         server=socket.socket()
