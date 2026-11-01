@@ -388,8 +388,8 @@ class Window(Gtk.ApplicationWindow):
             fields['port'] = entry('TCP port', str(url.port or 5025), '5025')
             content.append(self.label('Raw SCPI TCP connections. Automatic LAN discovery is not available.', 'dim-label'))
         else:
-            fields['path'] = entry('USB address' if kind == 'USB' else 'TMC device path', identity or '', 'hantek://usb/3-1' if kind == 'USB' else '/dev/usbtmc0')
-            content.append(self.label('Use Scan to find accessible USB instruments. Hantek addresses follow the USB port when reconnected.', 'dim-label'))
+            fields['path'] = entry('USB address' if kind == 'USB' else 'TMC device path', identity or '', 'riden:///dev/ttyUSB1 or hantek://usb/3-1' if kind == 'USB' else '/dev/usbtmc0')
+            content.append(self.label('Scan finds USBTMC/Hantek devices. For RD6006 enter riden:///dev/serial/by-id/…?baud=115200&address=1. Serial adapters are not automatically probed.', 'dim-label'))
         def read():
             if kind == 'Serial':
                 resource = f"serial://{fields['path'].get_text().strip()}?baud={rates[baud.get_selected()]}"

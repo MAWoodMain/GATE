@@ -3,13 +3,15 @@ from pathlib import Path
 from gate.drivers.siglent import SiglentSDS
 from gate.drivers.fluke45 import Fluke45
 from gate.drivers.keysight344xxa import Keysight344xxA
+from gate.riden_usb import RidenUSB
+from gate.drivers.riden import RidenRD6006
 from gate.serial import FlukeSerial
 from gate.transport import SCPI
 from gate.hantek_usb import HantekUSB, resources as hantek_resources
 from gate.drivers.hantek365 import Hantek365
 
 def driver_types():
-    drivers = [SiglentSDS, Fluke45, Hantek365, Keysight344xxA]
+    drivers = [SiglentSDS, Fluke45, Hantek365, Keysight344xxA, RidenRD6006]
     for entry in entry_points(group="gate.drivers"):
         cls = entry.load()
         if cls not in drivers:
@@ -31,6 +33,13 @@ def usb_inventory():
     return result
 
 def connect(resource):
+    if resource.startswith('riden://'):
+        transport = RidenUSB(resource)
+        try:
+            return RidenRD6006(transport)
+        except Exception:
+            transport.close()
+            raise
     if resource.startswith('hantek://'):
         transport = HantekUSB(resource)
         try:
