@@ -13,7 +13,8 @@ def main():
     daemon.add_argument("--ephemeral", action="store_true", help="Do not load/save device profiles or settings")
     daemon.add_argument("--no-control-api", action="store_true")
     daemon.add_argument("--allow-raw", action="store_true", help="Allow authenticated raw instrument queries/writes")
-    sub.add_parser("gui", help="Open the GTK application")
+    gui = sub.add_parser("gui", help="Open the GTK application")
+    gui.add_argument("--output", metavar="INSTRUMENT", help="Open an output configuration window")
     sub.add_parser("status", help="Show service state")
     command = sub.add_parser("command", help="Queue a JSON service command")
     command.add_argument("json")
@@ -32,8 +33,12 @@ def main():
         print(json.dumps(call(proxy(), "Snapshot" if args.command == "status" else "Command",
                               json.loads(args.json) if args.command == "command" else None), indent=2))
     else:
-        from gate.app import launch
-        launch()
+        if getattr(args, "output", None):
+            from gate.output_window import launch
+            launch(args.output)
+        else:
+            from gate.app import launch
+            launch()
 
 if __name__ == "__main__":
     main()

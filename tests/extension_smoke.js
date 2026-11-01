@@ -55,6 +55,15 @@ export async function run() {
         extension._render(snapshot);
     }
     extension._render(snapshot);
+    snapshot.instruments.push({id: 'psu', name: 'Fixture PSU', category: 'power_supply', simulated: true,
+        output_control_supported: true, readings: []});
+    extension._render(snapshot);
+    const outputItem = extension._devices.get('psu').outputItem;
+    check(outputItem?.sensitive, 'Output-capable instrument has no output launcher');
+    extension._render(snapshot);
+    check(extension._devices.get('psu').outputItem === outputItem, 'Refresh replaced output launcher');
+    snapshot.instruments.pop();
+    extension._render(snapshot);
     const selector = extension._deviceSection;
     const scope = extension._devices.get('scope');
     const meter = extension._devices.get('demo:multimeter');

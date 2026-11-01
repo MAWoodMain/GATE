@@ -15,6 +15,12 @@ class RidenRD6006:
     experiment_limits = dict(voltage=[0., 60.], current=[0., 6.], power_w=360.)
     range_unavailable_reason = 'Fixed readback resolution; output limits are separate from measurement ranges.'
 
+    output_configuration = dict(
+        enabled_reading='output_enabled', voltage_reading='voltage', current_reading='current',
+        controls=dict(
+            voltage=dict(label='Output voltage', unit='V', min=0., max=60., step=.01, reading='set_voltage'),
+            current_limit=dict(label='Current limit', unit='A', min=.001, max=6., step=.001, reading='current_limit')))
+
     @staticmethod
     def matches(identity):
         return identity.startswith('RIDEN,RD6006,')

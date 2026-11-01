@@ -89,6 +89,7 @@ when disabled. Examples and constraints follow below or in the linked contracts.
 | `demo`, `demo_experiment` | Add the original demo instruments or the coupled converter/observation bench; do not enable outputs |
 | `record`, `stop_recording` | Start ordinary all-device logging at `path`, or stop it |
 | `source` | AOIP calibrators: `instrument`, `quantity` (`voltage`/`current`, PJ also `resistance`), SI `value`, explicit `range` from cached `source_controls`; requires standby, never enables output |
+| `configure_output` | `instrument`, driver-declared `control` (`voltage`, `current_limit`, optional `priority`, `ovp`, `ocp`), typed `value`; validates against cached `output_configuration.controls`, confirmed setter on acquisition owner, cancels an active sweep, never enables output |
 | `static`, `sweep`, `output`, `cancel_sweep` | Demo PSU/RD6006: `instrument`, `voltage`, optional `current_limit` on supported drivers; sweep `start`/`stop`/`step`/`dwell`; output `enabled` (also AOIP calibrators), real enable requires `wiring_confirmed=true` |
 | `query`, `write` | `instrument` and one model-specific `command`; requires HTTP raw access enabled |
 | `save_experiment`, `delete_experiment`, `check_experiment` | Save a definition object as `experiment`; delete/check by experiment ID, with `bindings` for checking |
@@ -137,6 +138,8 @@ replies even without CR/LF, within a 3-second transaction deadline. See the
 [AOIP setup, channel and source-control contract](docs/aoip.md).
 PJ `measure.*` input readings are independent from `source.*` setpoints; the SN
 exposes source only because its manual provides no independent measurement query.
+`output_configuration` is a passive, driver-declared catalog for the pop-out output panel (`gate gui --output INSTRUMENT_ID`). `enabled_reading`, optional `voltage_reading` and `current_reading` name explicit output reading keys. `controls` maps IDs to `label`, `unit`, `min`, `max`, `step` and optional confirmed `reading`. A priority control declares `choices: ["voltage", "current"]` and publishes its confirmed choice in `output_settings.priority`. Driver setters must confirm changes before returning. Only declared controls may be configured; absence does not imply safe bounds or model support. Numeric controls without a reading key may publish confirmed values under the same key in `output_settings`. RD6006 controls are voltage and current limit; the demo PSU additionally implements priority and OVP/OCP thresholds (its ideal resistive load has the same steady-state envelope for both priorities). Priority and OVP/OCP configuration remain unavailable on current real drivers. RD6006 protection trips and CV/CC regulation are observations, not priority settings. AOIP uses the existing `source` action and keeps source setpoints separate from output measurements. No control or enable state is saved/replayed by the output panel. Calculated power requires fresh, quality-ok voltage/current output readings in V/A, and is unavailable on AOIP.
+
 `source_controls` maps quantity/range IDs to `[min, max, resolution]` in SI units.
 Use `source` in standby, then separate `output(enabled=true,
 wiring_confirmed=true)`. Enable requires a freshly configured, confirmed source

@@ -101,3 +101,18 @@ References:
 [RD6006 product specifications](https://joy-it.net/en/products/JT-RD6006),
 [RD6006 register map](https://github.com/Baldanos/rd6006/blob/master/registers.md),
 [RD60xx Modbus protocol](https://joy-it.net/files/files/Produkte/JT-PS1440-C-Pro/MODBUS_Protocol_RD60xx_PSxx.pdf).
+
+### Output panel verification
+
+On 2026-11-01 the GTK output panel was exercised through the acquisition service
+with the RD6006 output connected to a Fluke 45 already in DC voltage mode.
+A 0.010 A limit was applied through the new `configure_output` action, followed
+by 1 V and 3.3 V setpoints. The Fluke read 1.0048 V and 3.313 V respectively;
+the panel displayed output state, supply voltage/current and calculated V × A
+power (0 W at the supply's zero-current resolution with this meter load).
+Panel enable/disable completed with confirmed readback. The original 12 V / 6 A
+setpoints were restored with output off. A later Modbus polling timeout required
+a passive reconnect; a valid post-reconnect sample confirmed 12 V / 6 A and
+output off. This verifies the panel workflow, not load regulation, current-limit
+accuracy or calibration. The real driver still preserves OVP/OCP thresholds and
+does not advertise writable priority/protection controls.

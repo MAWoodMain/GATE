@@ -16,6 +16,7 @@ from gate.drivers.simulated import Simulated, ConverterBench, SimulatedThermomet
 from gate.model import Reading, MeasurementFunction
 from gate.ranges import range_catalog, range_option, validate_ranges, apply_ranges
 from gate.channels import channel_catalog, current_functions, function_group
+from gate.outputs import output_catalog, configure_output
 from gate.storage import Recorder
 from gate.experiments import BUCK_CONVERTER, validate_definition, check_bindings
 from gate.experiment_runs import ExperimentPlan, ExperimentRun, data_directory, history
@@ -383,7 +384,7 @@ class Engine:
                     self.experiment_run.finish('cancelled', 'Equipment configuration changed')
                 self.publish_experiment()
             elif action in ('settings', 'scan', 'connect', 'query', 'write', 'source', 'static', 'sweep', 'output',
-                            'cancel_sweep', 'select_function', 'select_range', 'display_measurements', 'instrument_settings',
+                            'cancel_sweep', 'configure_output', 'select_function', 'select_range', 'display_measurements', 'instrument_settings',
                             'copy_settings', 'start_experiment', 'start_experiment_sequence', 'demo_experiment'):
                 raise ValueError('Stop the active experiment before changing equipment or acquisition settings')
         if action == 'start_experiment_sequence':
@@ -699,6 +700,12 @@ class Engine:
                 self.recorder.close()
                 self.recorder = None
             self.state["recording"] = False
+        elif action == 'configure_output':
+            instrument = self.instruments[self.resolve(args['instrument'])]
+            configure_output(instrument, args['control'], args['value'])
+            self.sweeps.pop(instrument.id, None)
+            if self.recorder:
+                self.recorder.event(time.monotonic_ns()-self.origin, instrument.id, f'configure_output: {args}')
         elif action == 'source':
             instrument = self.instruments[self.resolve(args['instrument'])]
             if not callable(getattr(instrument, 'configure_source', None)):
@@ -791,6 +798,8 @@ class Engine:
                               output_control_supported=bool(getattr(instrument, "output_control_supported", False) or instrument.simulated and instrument.category == "power_supply"),
                               experiment_control_supported=bool(getattr(instrument, 'experiment_control_supported', False)),
                               experiment_limits=copy.deepcopy(getattr(instrument, 'experiment_limits', {})),
+                              output_configuration=output_catalog(instrument),
+                              output_settings=copy.deepcopy(getattr(instrument, 'output_settings', {})),
                               source_controls=copy.deepcopy(getattr(instrument, 'source_controls', {})),
                               range_controls=range_catalog(instrument),
                               channels=channel_catalog(instrument, self.functions(instrument, readings)),

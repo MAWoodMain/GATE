@@ -194,6 +194,21 @@ export default class GateExtension extends Extension {
                 this._devices.set(instrument.id, device);
                 this._deviceSection.addMenuItem(device.item, position);
             }
+            if (instrument.output_control_supported && !device.outputItem) {
+                device.outputItem = new PopupMenu.PopupMenuItem('Configure output…');
+                device.item.menu.addMenuItem(device.outputItem, 0);
+                device.outputItem.connect('activate', () => {
+                    try {
+                        const info = Gio.DesktopAppInfo.new('io.github.MAWoodMain.GATE.desktop');
+                        const executable = info?.get_executable() ?? GLib.find_program_in_path('gate');
+                        if (!executable) throw new Error('GATE launcher is not installed');
+                        Gio.Subprocess.new([executable, 'gui', '--output', instrument.id], Gio.SubprocessFlags.NONE);
+                    } catch (error) {
+                        Main.notify('GATE', `Could not open output controls: ${error.message}`);
+                    }
+                });
+            }
+            if (device.outputItem) device.outputItem.sensitive = Boolean(instrument.output_control_supported && !instrument.offline);
             const title = deviceName(instrument);
             const serial = instrument.serial ?? (!instrument.custom_name ? instrument.name.split(',')[2]?.trim() : null);
             device.item.label.set_text((!instrument.simulated && serial ? `${title} · ${serial}` : title) + (instrument.offline ? ' (offline)' : ''));
@@ -434,6 +449,7 @@ export default class GateExtension extends Extension {
         this._label.set_text('GATE · offline');
         this._details.label.set_text('Start the GATE acquisition service');
         for (const device of this._devices.values()) {
+            if (device.outputItem) device.outputItem.sensitive = false;
             for (const row of device.functions.values()) {
                 row.menuItem.label.set_text(`${row.definition.label}   — (offline)`);
                 row.item.sensitive = false;
