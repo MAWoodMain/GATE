@@ -12,6 +12,8 @@ gate = "gate.__main__:main"
 [project.entry-points."gate.drivers"]
 siglent_sds = "gate.drivers.siglent:SiglentSDS"
 keysight344xxa = "gate.drivers.keysight344xxa:Keysight344xxA"
+aoip_sn8310 = "gate.drivers.aoip:AOIPSN8310"
+aoip_pj6301 = "gate.drivers.aoip:AOIPPJ6301"
 fluke45 = "gate.drivers.fluke45:Fluke45"
 riden_rd6006 = "gate.drivers.riden:RidenRD6006"
 hantek365 = "gate.drivers.hantek365:Hantek365"

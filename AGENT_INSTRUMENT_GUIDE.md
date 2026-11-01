@@ -88,7 +88,8 @@ when disabled. Examples and constraints follow below or in the linked contracts.
 | `settings` | Service-wide polling `interval` in seconds, 0.1–60 |
 | `demo`, `demo_experiment` | Add the original demo instruments or the coupled converter/observation bench; do not enable outputs |
 | `record`, `stop_recording` | Start ordinary all-device logging at `path`, or stop it |
-| `static`, `sweep`, `output`, `cancel_sweep` | Demo PSU/RD6006: `instrument`, `voltage`, optional `current_limit` on supported drivers; sweep `start`/`stop`/`step`/`dwell`; output `enabled`, real enable requires `wiring_confirmed=true` |
+| `source` | AOIP calibrators: `instrument`, `quantity` (`voltage`/`current`, PJ also `resistance`), SI `value`, explicit `range` from cached `source_controls`; requires standby, never enables output |
+| `static`, `sweep`, `output`, `cancel_sweep` | Demo PSU/RD6006: `instrument`, `voltage`, optional `current_limit` on supported drivers; sweep `start`/`stop`/`step`/`dwell`; output `enabled` (also AOIP calibrators), real enable requires `wiring_confirmed=true` |
 | `query`, `write` | `instrument` and one model-specific `command`; requires HTTP raw access enabled |
 | `save_experiment`, `delete_experiment`, `check_experiment` | Save a definition object as `experiment`; delete/check by experiment ID, with `bindings` for checking |
 | `start_experiment`, `start_experiment_sequence`, `cancel_experiment` | Start a `test` with `parameters`, or an ordered `tests` list; both use `experiment`/`bindings` and explicit output/wiring confirmations where required; cancel stops the active sequence as well as its test |
@@ -129,11 +130,26 @@ An earlier bench check connected the Fluke input to the scope's nominal **1 kHz 
 
 Demo devices have `simulated: true` and IDs beginning `demo:`. Keep simulated and real data distinct in reports.
 
+AOIP SN-8310/PJ-6301 USB RS-232 support is protocol-tested; hardware verification
+is pending. Use `aoip:///dev/serial/by-id/…?baud=9600`, with framing/flow and
+`idle` options matched to the unit. The default 0.2-second quiet interval completes
+replies even without CR/LF, within a 3-second transaction deadline. See the
+[AOIP setup, channel and source-control contract](docs/aoip.md).
+PJ `measure.*` input readings are independent from `source.*` setpoints; the SN
+exposes source only because its manual provides no independent measurement query.
+`source_controls` maps quantity/range IDs to `[min, max, resolution]` in SI units.
+Use `source` in standby, then separate `output(enabled=true,
+wiring_confirmed=true)`. Enable requires a freshly configured, confirmed source
+in this connection; reconnect never restores it. STBY is zero output, not
+isolation. Generic PSU sweeps/compliance and experiment output controls are not
+implemented for these calibrators. PJ TXP loop supply selection is excluded.
+
 ## Connect and manage instruments
 
 ```python
 api.command('scan')  # accessible USBTMC nodes and recognized Hantek USB meters; no arbitrary serial probing
 api.command('connect', resource='serial:///dev/ttyUSB0?baud=9600')
+api.command('connect', resource='aoip:///dev/ttyUSB1?baud=9600')  # AOIP via USB RS-232 adapter
 api.command('connect', resource='tcp://192.168.1.100:5025')
 api.command('connect', resource='hantek://usb/3-3.1.3')  # use the actual discovered USB port
 ```

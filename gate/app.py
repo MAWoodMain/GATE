@@ -377,12 +377,38 @@ class Window(Gtk.ApplicationWindow):
         if kind == 'Serial':
             fields['path'] = entry('Device path', url.path if identity else '', '/dev/serial/by-id/… or /dev/ttyUSB0')
             content.append(self.label('Baud rate', 'device-title'))
-            rates = ['300', '600', '1200', '2400', '4800', '9600']
+            rates = ['300', '600', '1200', '2400', '4800', '9600', '19200']
             baud = Gtk.DropDown.new_from_strings(rates)
             current = parse_qs(url.query).get('baud', ['9600'])[0]
             baud.set_selected(rates.index(current) if current in rates else 5)
             content.append(baud)
-            content.append(self.label('8 data bits · No parity · 1 stop bit. Prefer a stable /dev/serial/by-id/ path.', 'dim-label'))
+            content.append(self.label('Protocol', 'device-title'))
+            protocol = Gtk.DropDown.new_from_strings(['Fluke 45', 'AOIP SN-8310 / PJ-6301'])
+            protocol.set_selected(1 if url.scheme == 'aoip' else 0)
+            content.append(protocol)
+            aoip_options = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            content.append(aoip_options)
+            serial_options = {}
+            options = parse_qs(url.query)
+            for key, title, choices, default in (
+                    ('bits', 'Data bits', ['8', '7'], '8'),
+                    ('parity', 'Parity', ['none', 'even', 'odd'], 'none'),
+                    ('stop', 'Stop bits', ['1', '2'], '1'),
+                    ('flow', 'Flow control', ['none', 'xonxoff', 'rtscts'], 'none')):
+                aoip_options.append(self.label(title, 'device-title'))
+                widget = Gtk.DropDown.new_from_strings(choices)
+                value = options.get(key, [default])[0]
+                widget.set_selected(choices.index(value) if value in choices else 0)
+                aoip_options.append(widget)
+                serial_options[key] = (widget, choices)
+            aoip_options.append(self.label('Reply quiet interval (seconds)', 'device-title'))
+            idle = Gtk.SpinButton.new_with_range(.05, 2., .05)
+            idle.set_digits(2)
+            idle.set_value(float(options.get('idle', ['0.2'])[0]))
+            aoip_options.append(idle)
+            aoip_options.set_visible(protocol.get_selected() == 1)
+            protocol.connect('notify::selected', lambda *_: aoip_options.set_visible(protocol.get_selected() == 1))
+            content.append(self.label('Match the instrument settings. Fluke uses 8N1. Prefer a stable /dev/serial/by-id/ path.', 'dim-label'))
         elif kind == 'Network':
             fields['host'] = entry('Host or IP address', url.hostname or '', '192.168.1.100')
             fields['port'] = entry('TCP port', str(url.port or 5025), '5025')
@@ -392,7 +418,11 @@ class Window(Gtk.ApplicationWindow):
             content.append(self.label('Scan finds USBTMC/Hantek devices. For RD6006 enter riden:///dev/serial/by-id/…?baud=115200&address=1. Serial adapters are not automatically probed.', 'dim-label'))
         def read():
             if kind == 'Serial':
-                resource = f"serial://{fields['path'].get_text().strip()}?baud={rates[baud.get_selected()]}"
+                scheme = 'aoip' if protocol.get_selected() == 1 else 'serial'
+                resource = f"{scheme}://{fields['path'].get_text().strip()}?baud={rates[baud.get_selected()]}"
+                if scheme == 'aoip':
+                    resource += ''.join(f'&{key}={choices[widget.get_selected()]}' for key, (widget, choices) in serial_options.items())
+                    resource += f'&idle={idle.get_value():g}'
             elif kind == 'Network':
                 host = fields['host'].get_text().strip()
                 if ':' in host and not host.startswith('['):

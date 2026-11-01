@@ -13,7 +13,7 @@ from gate import __version__
 MAX_COMMAND_BYTES = 1048576
 
 ACTIONS = {'start_experiment_sequence', 'demo_experiment', 'start_experiment', 'cancel_experiment', 'save_experiment', 'delete_experiment', 'check_experiment', 'scan', 'connect', 'edit_device', 'instrument_settings', 'display_measurements', 'copy_settings', 'forget', 'disconnect', 'settings', 'demo', 'record', 'stop_recording', 'select_function',
-           'select_range', 'static', 'sweep', 'output', 'cancel_sweep', 'query', 'write'}
+           'select_range', 'source', 'static', 'sweep', 'output', 'cancel_sweep', 'query', 'write'}
 
 def runtime_directory():
     return Path(os.environ.get('XDG_RUNTIME_DIR', f'/tmp/gate-{os.getuid()}')) / 'gate'

@@ -218,6 +218,22 @@ class ControlTests(unittest.TestCase):
             self.assertEqual(state['instrument_profiles']['demo:power_supply']['settings']['display_functions'], functions)
             self.assertFalse(self.engine.instruments['demo:power_supply'].enabled)
 
+    def test_typed_calibrator_source_is_available_without_raw_access(self):
+        from unittest.mock import Mock
+        configure = Mock()
+        device = SimpleNamespace(id='aoip-fixture', name='AOIP,PJ6301,fixture,1',
+            category='calibrator', simulated=False, configure_source=configure,
+            read=lambda: [Reading('source.voltage', 1.25, 'V')], close=Mock(),
+            source_controls={'voltage': {'V6': [-1., 6., .00001]}})
+        self.engine.instruments[device.id] = device
+        self.assertIn('source', self.request('/v1/health')[1]['actions'])
+        status, accepted = self.request('/v1/commands', dict(action='source', instrument=device.id,
+            quantity='voltage', value=1.25, range='V6'))
+        self.assertEqual(status, 202)
+        self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+        configure.assert_called_once_with('voltage', 1.25, 'V6')
+        self.assertFalse(self.control.allow_raw)
+
     def test_manifest_is_removed_when_server_stops(self):
         path=self.control.path
         self.control.close()
