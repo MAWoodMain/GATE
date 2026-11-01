@@ -1,13 +1,12 @@
 # GATE instrument guide for agents
 
-Instruments publish `channels`, channel-owned `functions`, `current_functions`
-and driver-declared `range_controls`. Use `select_range` with catalog IDs for
-manual range selection; `instrument_settings` accepts `channel_functions` and
-`ranges` for persistent per-channel choices. See the [channel/range contract and
-driver support](docs/instrument-ranges.md). Range controls are not output safety
-ratings and do not enable outputs.
+GATE (Gnome Automatic Test Equipment) is a background acquisition and control service for Ubuntu. Agents operate instruments through its authenticated local HTTP API. The GNOME top bar monitors readings and provides instrument → channel → function menus, display switches and range selection. The main window manages devices/settings, creates and edits experiments/tests, runs test sequences and displays results.
 
-GATE (Gnome Automatic Test Equipment) is a background acquisition and control service for Ubuntu. Agents operate instruments through its authenticated local HTTP API. The human-facing GNOME top bar monitors readings and selects measurement functions; the main window only manages devices and GATE settings.
+This guide is the entry point for every supported agent command. Detailed JSON
+fields and driver limitations are defined in the linked [test specification](docs/test-spec.md),
+[secondary observation contract](docs/secondary-measurements.md) and
+[channel/range contract](docs/instrument-ranges.md). Inspect live capabilities;
+an API feature does not imply every driver supports it.
 
 ## Discover the running service
 
@@ -19,6 +18,15 @@ The default listener is `http://127.0.0.1:8765`. Discover its actual URL and bea
 The manifest contains `api_version`, `url`, `token`, `pid`, and `allow_raw`. Its directory is private and the file is mode 0600. Do not print, commit, or include the token in reports. It rotates when the service restarts. The listener binds only to IPv4 loopback. Requests must use its localhost/127.0.0.1 host and a bearer token; browser Origin requests are rejected.
 
 If the service is installed, start it with `systemctl --user start gate`. For development, from the repository run `python3 -m gate service --allow-raw`. Omit `--allow-raw` to restrict HTTP clients to typed driver operations. `--control-port PORT` changes the port; `--no-control-api` disables HTTP. `--ephemeral` disables saved device profiles/settings.
+
+`service --demo` adds the original simulated instruments; `--interval SECONDS`
+overrides the polling interval. `gate status` prints a snapshot and
+`gate command '{"action":"scan","request":"agent-scan-001"}'` queues a command
+through the session D-Bus service rather than HTTP. CLI command completion only
+acknowledges queueing (`{"queued": true}`); supply your own unique `request` ID
+and inspect that key in the snapshot's `commands` map. These local
+D-Bus commands remain available when HTTP is disabled. `gate gui` opens the main
+window; `gate --version` prints the installed version.
 
 ## Use the supplied Python client
 
@@ -34,10 +42,16 @@ devices = api.request('/v1/instruments')['instruments']
 for device in devices:
     print(device['id'], device['name'], device['category'])
     print(device['functions'])
+    print(device.get('channels', []))
+    print(device.get('range_controls', []))
     print(device['readings'])
 ```
 
 `api.submit(action, **args)` returns immediately with an operation ID and status URL. `api.command(action, **args)` waits for completion and raises on failure. Its default wait is 30 seconds; a client timeout does **not** cancel an already queued operation.
+
+Command completion and acquisition publication are separate: new readings and
+some newly added instrument cards appear on the next polling cycle. Poll for the
+expected instrument/function rather than assuming the next snapshot contains it.
 
 ## HTTP contract
 
@@ -58,6 +72,27 @@ For example, submit `{"action":"select_function","instrument":"<exact ID from di
 
 Missing/wrong tokens return 401. Browser/foreign-host requests or disabled raw operations return 403. Malformed actions/JSON return 400; wrong content type returns 415; oversized bodies return 413. A well-formed action that fails on the device returns a **failed command result**, even though submission returned 202.
 
+### Command index
+
+The following covers every action in the current service. Use `/v1/health` to
+check the actions available in the running version; raw actions are omitted
+when disabled. Examples and constraints follow below or in the linked contracts.
+
+| Actions | Principal arguments / purpose |
+|---|---|
+| `scan`, `connect`, `edit_device` | Discover supported USB devices; connect using `resource`; edit an existing connection using `instrument` and replacement `resource` |
+| `disconnect`, `forget` | `instrument`; retain a connection with `forget=False`, or explicitly remove `scope='connection'` / `'instrument'` |
+| `instrument_settings`, `copy_settings` | `instrument`, optional `name`/`settings`; copy from `source` of the same driver type |
+| `select_function`, `display_measurements` | `instrument` and `function`, or a `functions` list; the latter accepts optional `ranges` preferences |
+| `select_range` | `instrument`, range `control` ID and `range` choice ID |
+| `settings` | Service-wide polling `interval` in seconds, 0.1–60 |
+| `demo`, `demo_experiment` | Add the original demo instruments or the coupled converter/observation bench; do not enable outputs |
+| `record`, `stop_recording` | Start ordinary all-device logging at `path`, or stop it |
+| `static`, `sweep`, `output`, `cancel_sweep` | Original demo PSU: `instrument`, `voltage`; sweep `start`/`stop`/`step`/`dwell`; output `enabled` |
+| `query`, `write` | `instrument` and one model-specific `command`; requires HTTP raw access enabled |
+| `save_experiment`, `delete_experiment`, `check_experiment` | Save a definition object as `experiment`; delete/check by experiment ID, with `bindings` for checking |
+| `start_experiment`, `start_experiment_sequence`, `cancel_experiment` | Start a `test` with `parameters`, or an ordered `tests` list; both use `experiment`/`bindings` and explicit output/wiring confirmations where required; cancel stops the active sequence as well as its test |
+
 ## Inspect before acting
 
 Read the current state, identify the exact instrument, and use its advertised `functions` rather than guessing a model's command dialect. Each function includes:
@@ -67,12 +102,21 @@ Read the current state, identify the exact instrument, and use its advertised `f
 - `channel`: reading channel to observe after selection.
 - `unit`: normal physical unit.
 - `configurable`: true if selecting it changes the instrument's measurement function.
+- `instrument_channel`: owning physical/logical channel; distinct from the reading key in `channel`.
+- `exclusive_group`: functions sharing this group **on the same instrument channel** cannot be selected together.
+
+`channels` contains each instrument channel's ID, label and functions; the flat
+`functions` catalog remains available. Function IDs are unique within an
+instrument even when functions share a reading key. Different channels may
+have different function sets. `current_functions` maps channel IDs to active
+function IDs. `current_function` remains the compatibility field for existing
+single-channel meters; it is not a complete multi-channel state description.
 
 A driver advertises only implemented capabilities. The scope currently exposes C1/C2 peak-to-peak voltage, RMS voltage and frequency as read-only scalar channels. The Fluke 45 exposes ten configurable **primary-display** functions. Secondary-display control is intentionally outside this workflow; any existing secondary readings are passive.
 
 Record the original function/settings/output state before making changes. Stay within the user's requested task and the equipment's limits. Never infer that an output is disabled from a zero reading. Calibration, resets and output enabling require a corresponding user request; avoid issuing them merely to discover a device.
 
-### Current bench
+### Previously verified bench
 
 Use the returned `id` for instrument commands and `resource` for connection commands. Identified hardware has a stable `instrument:…` ID derived from driver type/model and serial number; the resource may change across ports or transport methods. Endpoint aliases still resolve to their identified instrument. Drivers without usable serial numbers retain connection-local IDs.
 
@@ -81,16 +125,17 @@ Use the returned `id` for instrument commands and `resource` for connection comm
 | Siglent SDS1202X-E, firmware 1.3.26 | Linux USBTMC, previously `/dev/usbtmc3` | Scalar readings on C1/C2; raw SCPI can configure other documented settings |
 | Fluke 45, firmware 1.7 / display D1.0 | `serial:///dev/serial/by-id/usb-1a86_USB2.0-Ser_-if00-port0?baud=9600` | 9600 baud, 8N1, command echo and completion prompts handled by GATE |
 
-The user has connected the Fluke input to the scope's nominal **1 kHz square-wave probe compensation output**. Voltage and frequency are suitable checks for that connection. Resistance, continuity and diode measurements require a suitable unpowered test object; current measurements require the correct input terminals and circuit arrangement. Do not automatically cycle all modes on the connected calibration signal.
+An earlier bench check connected the Fluke input to the scope's nominal **1 kHz square-wave probe compensation output**. This is historical verification, not a live wiring assertion. Confirm the current arrangement before choosing a function. Voltage and frequency are suitable checks for that connection. Resistance, continuity and diode measurements require a suitable unpowered test object; current measurements require the correct input terminals and circuit arrangement. Do not automatically cycle all modes on the connected calibration signal.
 
 Demo devices have `simulated: true` and IDs beginning `demo:`. Keep simulated and real data distinct in reports.
 
 ## Connect and manage instruments
 
 ```python
-api.command('scan')  # accessible Linux USBTMC nodes; does not probe arbitrary serial ports
+api.command('scan')  # accessible USBTMC nodes and recognized Hantek USB meters; no arbitrary serial probing
 api.command('connect', resource='serial:///dev/ttyUSB0?baud=9600')
 api.command('connect', resource='tcp://192.168.1.100:5025')
+api.command('connect', resource='hantek://usb/3-3.1.3')  # use the actual discovered USB port
 ```
 
 USB serial adapters identify the adapter, not the meter behind it, so add serial devices by explicit address. Schema version 2 in `$XDG_CONFIG_HOME/gate/devices.json` separates `connections` (resource, linked instrument, enabled flag) from `instrument_profiles` (type, hardware serial, friendly name, settings and supported functions). Legacy address-based profiles migrate automatically. `/v1/state` includes both collections, including disconnected instruments. TMC paths can change after replugging; Scan or add/edit the new path. After identification, an existing model/type + serial reuses its profile. For hardware without a usable serial, profiles stay connection-local rather than merging unrelated devices.
@@ -114,13 +159,111 @@ api.command('forget', instrument=device_id, scope='instrument')
 api.command('settings', interval=1.0)  # service-wide polling interval; stop recording first
 ```
 
-`instrument_settings.settings` supports `function` and `display_functions`, using function IDs from the instrument catalog. `display_functions` is a list of zero or more checked top-bar measurements; an explicit empty list keeps all readings hidden. Prefer `display_measurements` for updating that list: it validates coexistence, confirms any required mode change, and saves only on success. Functions with the same non-null `exclusive_group` cannot be displayed together. Configurable functions without a group are treated as the primary exclusive group for compatibility; passive scope measurements can coexist. Unchecking/hiding leaves the current hardware function and logging unchanged. Choices persist across restarts and connection methods, and can be changed for a saved offline instrument. Existing profiles without this field initially show one reading per instrument. Omitting `settings` preserves existing settings; `{}` clears the stored preferences and returns to the initial display choice. Names can be blank (use model identity) or up to 80 printable characters. Copying copies measurement and top-bar display preferences only, never names, serials or connections. Source and target must have the same exact driver type/model. Saved functions apply immediately if connected and are restored on subsequent connections, including a different transport; output enable state, arbitrary raw commands and sweeps are never saved/replayed. Only explicit function selections are saved; passive front-panel reads do not overwrite preferences.
+`instrument_settings.settings` accepts these keys:
+
+| Key | Meaning |
+|---|---|
+| `function` | Legacy single-function preference; value is a driver function ID |
+| `channel_functions` | Map of instrument channel IDs to their chosen function IDs |
+| `display_functions` | List of zero or more function IDs checked in the top bar |
+| `ranges` | Map of driver range-control IDs to driver range-choice IDs |
+
+`settings` replaces the saved settings object; merge with the current settings
+when editing only one preference. Omitting `settings` preserves it; `{}` clears
+saved preferences without resetting hardware. An explicit empty
+`display_functions` list keeps all readings hidden. Legacy `function` and
+`channel_functions` must not conflict on the same channel.
+
+Prefer `display_measurements` for changing visibility: it validates coexistence,
+confirms required mode changes and saves only on success. Functions with the same
+non-null `exclusive_group` **and the same `instrument_channel`** exclude one
+another. Configurable functions without a group default to that channel's primary
+group; passive scope measurements can coexist. Unchecking/hiding leaves hardware
+functions, ranges and logging unchanged. The action accepts an optional `ranges`
+map, validated and applied after function changes. The top bar uses this to select
+Auto when a function without a saved range is newly shown. Plain agent
+`display_measurements` calls do not implicitly request Auto; include the range
+preference explicitly if needed.
+
+Preferences persist across restarts and connection methods and can be edited for
+saved offline instruments using their last known catalogs. Older profiles without
+display preferences fall back to saved/current functions or an available reading;
+multi-channel instruments can show their known active functions together.
+Names may be blank (use model identity) or up to 80 printable characters. Copying
+copies function, range and display preferences, never names, serials or connections;
+source and target must have the same driver type/model. Connected instruments
+apply saved functions before their applicable ranges; reconnect restores them.
+Output enable state, arbitrary raw commands and sweeps are never replayed.
+Passive front-panel reads do not overwrite preferences. Failed configuration
+preserves saved preferences, but earlier hardware writes in a multi-step change
+are not rolled back transactionally.
 
 Connecting the same physical instrument through another method replaces its active transport, keeping its stable ID and shared logging series; GATE does not poll the same instrument twice. Previously used addresses remain saved but inactive. Deliberately disconnected instruments stay disconnected across service restarts. An inactive address can be removed without disrupting another active method. Removing the last connection keeps a saved instrument profile available for renaming/copying; forgetting the whole instrument deletes its profile and all addresses. Recordings are retained. The legacy `disconnect` default still removes just the selected connection; specify `forget=False` for a plain disconnect, and use `forget` with an explicit scope for removal.
 
 A failed add or connection edit keeps the new endpoint for correction/retry and returns a failed command result. Invalid or duplicate connection edits leave the existing transport intact. If a different physical instrument is discovered at a reused address, it receives its own profile and never inherits settings from the previous serial number.
 
 The interval is a requested host polling interval, not a guarantee of sample rate or simultaneous acquisition. Inspect actual timestamps. Hardware may take longer, especially immediately after a function change. An unresponsive device is removed from acquisition; reconnect explicitly after correcting access, cable or settings problems.
+
+## Channel functions and ranges
+
+A driver can expose any number of channels with different function catalogs.
+Use `select_function` with the instrument-wide function ID; its declared
+`instrument_channel` determines the affected channel. To save several channel
+choices together, merge a `channel_functions` map into `instrument_settings`.
+This does not imply that an SMU hardware driver is currently installed.
+
+Each `range_controls` entry has `id`, `instrument_channel`, an optional `function`,
+`label`, `unit` and `options`. Each option has an `id`, `label`, optional nominal
+numeric `value` and an `automatic` flag. Treat IDs as opaque: a numeric-looking
+ID is not a command or a physical limit. Range values are nominal full scales
+or scales such as V/div, not equipment safety ratings. Some ranges are
+rate-dependent and have no single numeric value.
+
+`select_range` requires a connected instrument. For a function-specific control,
+select the matching function on that channel first and wait for confirmation.
+It changes neither current terminals nor output enable state. Independent
+controls, such as the scope's C1/C2 input scales, belong to their channel and
+affect all functions using that input. The scope declares input scale before
+probe attenuation; its driver accounts for the existing probe factor. Do not
+confuse these controls with scalar frequency ranges.
+
+This complete example uses only the original **simulated** multimeter:
+
+```python
+import time
+
+api.command('demo')
+deadline = time.monotonic() + 5
+meter = None
+while meter is None and time.monotonic() < deadline:
+    meter = next((d for d in api.request('/v1/instruments')['instruments']
+                  if d['id'] == 'demo:multimeter'), None)
+    if meter is None:
+        time.sleep(.1)
+if meter is None:
+    raise TimeoutError('Demo meter has not appeared in acquisition state')
+control = next(c for c in meter['range_controls'] if c['id'] == 'voltage_dc')
+automatic = next(o for o in control['options'] if o['automatic'])
+fixed = next(o for o in control['options'] if o['value'] == 10)
+api.command('select_range', instrument=meter['id'], control=control['id'], range=fixed['id'])
+api.command('select_range', instrument=meter['id'], control=control['id'], range=automatic['id'])
+```
+
+Successful selection saves `settings.ranges`. Reconnect restores independent
+controls and the ranges belonging to each channel's active function; inactive
+function preferences wait until that function is selected through GATE.
+Opening/refreshing the top bar sends no configuration commands. **Auto (default)**
+there is a preference, not a queried hardware-range readback. A saved manual
+choice takes precedence. **Keep instrument range** in Device Settings removes a
+saved override without writing a replacement range. Range changes are recording
+events and are blocked during active experiments or sequences.
+
+Keysight meters expose model-specific DC/AC V/A, resistance and capacitance
+ranges; 10 A choices require the meter's 10 A terminal already selected. Fluke
+range codes show slow versus medium/fast full scales without changing reading
+rate. Hantek manual ranging is explicitly unavailable pending USB protocol
+verification. An empty catalog is not an Auto capability. See the
+[driver range table and verification status](docs/instrument-ranges.md).
 
 ## Select a Fluke primary measurement function
 
@@ -154,7 +297,7 @@ After success, poll instrument state until `current_function` and the reading ch
 
 A reading is `{channel,value,unit,quality}`. Trust the reported unit; do not assume that a numeric exponent or displayed prefix implies a different unit. Modifiers may change the unit to dB or W and are represented in the channel name.
 
-Use a numeric value only when `quality == 'ok'` and `value` is not null. Other qualities include `unavailable`, `disabled`, `overload`, `underload`, `mode_changed` and `error`. In particular, scope frequency may be unavailable without a usable signal, and open resistance inputs may report overload. Neither means zero.
+Use a numeric value only when `quality == 'ok'` and `value` is not null. Other qualities include `unavailable`, `disabled`, `overload`, `underload`, `mode_changed`, `error`, `not_ready`, `out_of_range`, `relative` and `unsupported_configuration`. This is not an exhaustive enum: retain the driver's quality flag. In particular, scope frequency may be unavailable without a usable signal, and open resistance inputs may report overload. Neither means zero. A Hantek relative reading can retain a numeric value; it must not be consumed as an absolute measurement. Waveform quality is separate and can report clipping.
 
 `updated_utc_ns` describes the cached state's freshness. Every logging cycle has a shared tick; each device has its own acquisition duration. During a slow instrument operation the cached state may temporarily become old. HTTP inspection reads cached state; it does not race direct I/O against acquisition. Commands and reads run on one acquisition owner. Queued commands wake that owner independently of the sampling interval, although an in-progress instrument transaction must finish first.
 
@@ -212,15 +355,98 @@ print(result['result']['response'])
 
 Commands are limited to one line, 256 characters, no semicolon batches. `query` must contain `?`; `write` must not. Fluke writes still consume their completion prompt. SCPI writes do not attempt to read a nonexistent reply. Responses and failures are returned through command status. Consult the exact model's programming manual; do not guess commands from another manufacturer's dialect.
 
-## References
-
-- [Fluke 45 official user manual](https://media.fluke.com/d295e628-9a14-4bb4-9784-b10800c1cf0b_original%20file.pdf), chapter 5: function mnemonics, serial prompts, modifiers and measurement queries.
-- [Siglent SDS1000X-E programming resources](https://www.siglent.com/int/products-overview/sds1000x-e/).
-- [GATE architecture](docs/architecture.md) and [Fluke setup notes](docs/fluke45.md).
-
 ## Experiments
 
-Use `save_experiment`, `delete_experiment`, and `check_experiment` to manage arrangements and check role bindings. Definitions include the DUT and its wiring, functional equipment requirements, and named test descriptions. Checks never configure hardware or energise outputs. `demo_experiment` adds a coupled simulated converter bench. `start_experiment` starts an asynchronous test with bindings and parameters; converter sweeps require explicit `enable_outputs=true` and `wiring_confirmed=true`. Poll `/v1/experiment-runs` for run completion, independently of command completion, and use `cancel_experiment` to stop. Each procedure defines its automatic metrics and presentation; results include SQLite, CSV, SVG and HTML artifacts. Output sweeps disable both ends at completion or cancellation; real PSU/load drivers are still pending. See [the experiment contract and buck converter example](docs/experiments.md).
+Use `save_experiment`, `delete_experiment` and `check_experiment` to manage
+definitions and check role bindings. Definitions contain `id`, `name`,
+`description`, `dut`, `roles`, `connections` and `tests`. Tests define numeric
+parameters, sweep axes, typed setup/per-point controls, acquisition, scalar
+measurements, formulas, checks, early stopping, grouped reductions and output
+presentation. Saving/checking definitions does not configure or energise hardware.
+`check_experiment` checks role capabilities; starting a run additionally validates
+the complete parameterised plan and applicable driver limits.
+
+`start_experiment` takes an experiment ID, `test`, `bindings` and `parameters`.
+Output tests also require `enable_outputs=True` and `wiring_confirmed=True`.
+Command success acknowledges the **start**, not completion of the test. Poll
+`/v1/experiment-runs`: `active` is the current/latest run, `runs` holds the latest
+20 finished runs and `sequence` is the current/latest sequence. The equivalent
+snapshot keys are `experiment_run`, `experiment_runs` and `experiment_sequence`.
+Use `cancel_experiment` to stop a run or sequence.
+
+### Ordered test sequences
+
+`start_experiment_sequence` takes the same experiment, bindings and output
+confirmations plus an ordered `tests` list. Each entry is exactly
+`{'test': '<test-id>', 'parameters': {...}}`. Choose 1–20 distinct tests from that
+experiment. Every plan is preflighted before output changes. A test failure,
+cancellation, connection change or graceful service shutdown stops the sequence;
+pending tests are skipped. Outputs are disabled between tests. Sequences continue
+when the window closes, but do not resume after service restart.
+
+This example exercises the **coupled simulated** converter, not real outputs:
+
+```python
+import time
+
+api.command('demo_experiment')
+parameters = {
+    'input_start_v': 12., 'input_stop_v': 12.,
+    'load_start_a': .1, 'load_stop_a': .1,
+    'settle_s': api.request('/v1/state')['interval_s'],
+    'samples_per_point': 1,
+}
+started = api.command('start_experiment_sequence', experiment='buck_converter',
+    bindings={'supply': 'demo:converter_supply', 'load': 'demo:electronic_load'},
+    tests=[{'test': 'efficiency', 'parameters': parameters},
+           {'test': 'maximum_output_current', 'parameters': parameters}],
+    enable_outputs=True, wiring_confirmed=True)
+sequence_id = started['result']['id']
+while True:
+    sequence = api.request('/v1/experiment-runs')['sequence']
+    if sequence['id'] != sequence_id:
+        raise RuntimeError('The active sequence changed; inspect service state')
+    if sequence['state'] != 'running':
+        break
+    time.sleep(.2)
+print(sequence['state'], sequence['completed_tests'], sequence['tests'])
+```
+
+Inspect `sequence.state`, `tests`, zero-based `index` and `completed_tests`.
+Each test entry includes its state, run ID and any error. Executed tests retain
+separate results with a shared sequence ID and position. Terminal sequence states
+include `completed`, `failed` and `cancelled`; pending entries become `skipped`
+after an unsuccessful stop. Startup reports unfinished run artifacts as
+`interrupted`; it does not automatically recover physical output state.
+
+### Results and configuration boundaries
+
+Run artifacts live under `$XDG_DATA_HOME/gate/experiments/<run-id>` (normally
+`~/.local/share/gate/experiments`). Metadata provides their actual paths:
+`run.json`, `run.sqlite`, `points.csv`, `summary.csv`, `report.html` and configured
+`plot-*.svg` files. The JSON/SQLite retain the definition, resolved test JSON,
+parameters, equipment identities and results. The UI previews the first 20 table
+rows; reports/CSV retain all rows. Historical artifacts remain on disk beyond the
+20-run list. Ordinary `record` logging can run alongside an experiment.
+
+Configuration/function/range/raw/output-control changes are rejected during a
+run or sequence. Disconnect/forget/connection editing first cancels the active
+execution. Changing saved definitions does not mutate a running snapshot. Output
+tests attempt verified output disable on completion, failure, cancellation and
+graceful shutdown; communications loss, forced termination or power failure can
+prevent it. No verified real PSU/load driver is currently shipped.
+
+Existing experiment JSON needs no migration for the channel/range interface:
+its scalar `channel` still identifies a **reading key**, not an instrument channel
+ID, and `quantity` still resolves through the driver's `experiment_channels`.
+However, schema-v1 tests do **not** declare/apply meter functions or measurement
+ranges. Configure them before starting; top-bar Auto preferences are not an
+experiment configuration policy. Run metadata does not yet capture a complete
+applied-function/range snapshot. Mandatory roles require distinct instrument IDs,
+so an SMU's source/measurement channels cannot currently fill two mandatory roles
+of one experiment. Optional observation roles can reuse an instrument. Channel
+targeting for output controls is also future work; current controls address an
+instrument role. See [experiment execution and limits](docs/experiments.md).
 
 Tests are schema-v1 JSON objects, not fixed Python procedure types. See [the generic test specification](docs/test-spec.md) for sweeps, expressions, reductions, checks and rendering. `experiment_spec_version: 1` in the snapshot advertises support. Legacy definitions migrate on load/save; each run retains its resolved test JSON. The HTTP request limit is 1 MiB to accommodate larger definitions.
 
@@ -231,3 +457,14 @@ Scope channel/single-shot behaviour: scalar polling never measures off traces. R
 Hantek 365 direct USB: use USB Scan or `hantek://usb/PORT` (for example `hantek://usb/3-3.1.3`). It is a binary vendor interface, never SCPI or serial. The 365B thermocouple path and Celsius/Fahrenheit switching are hardware checked; other ranges/models are protocol-tested. Select TEMPC/TEMPF through instrument settings. Celsius logical quantities `temperature`/`dut_temperature` map to the single `temperature` channel; there is no fabricated ambient probe. USB serial `Y` is not unique, so identity remains port-local. See [Hantek 365](docs/hantek365.md) for permissions, settling and quality flags.
 
 Keysight 344xxA bench DMMs: the 34401A/10A/11A/60A/61A/65A/70A driver supports USBTMC and raw TCP, model-specific primary functions and scalar acquisition. Inspect the advertised catalog. Polling requires immediate triggering, one sample and one trigger, with math/scaling/null disabled; incompatible settings return `unsupported_configuration` without reconfiguring hardware. `READ?` starts fresh acquisition and may clear meter reading memory/statistics. Model and serial provide stable identities across Keysight/Agilent/HP branding. Software protocol checks pass; physical hardware verification is pending. See [Keysight setup and acquisition semantics](docs/keysight344xxa.md).
+
+## References and detailed contracts
+
+- [Channel ownership, range choices and driver support](docs/instrument-ranges.md).
+- [Experiment definitions, execution, sequences and results](docs/experiments.md).
+- [Declarative JSON fields, expressions, reductions, checks and rendering](docs/test-spec.md), with the [structural JSON Schema](gate/templates/test-v1.schema.json).
+- [Secondary scalars, temperatures, waveforms and screenshots](docs/secondary-measurements.md).
+- [Keysight setup](docs/keysight344xxa.md), [Fluke serial/quality notes](docs/fluke45.md) and [Hantek USB/probe notes](docs/hantek365.md).
+- [Screenshotted voltage-sweep walkthrough](docs/voltage-sweep-guide.md).
+- [Architecture](docs/architecture.md) and [installation/migration](packaging/INSTALL.md).
+- [Fluke 45 official manual](https://media.fluke.com/d295e628-9a14-4bb4-9784-b10800c1cf0b_original%20file.pdf), chapter 5, and [Siglent programming resources](https://www.siglent.com/int/products-overview/sds1000x-e/).
