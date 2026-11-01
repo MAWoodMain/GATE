@@ -90,7 +90,7 @@ when disabled. Examples and constraints follow below or in the linked contracts.
 | `record`, `stop_recording` | Start ordinary all-device logging at `path`, or stop it |
 | `source` | AOIP calibrators: `instrument`, `quantity` (`voltage`/`current`, PJ also `resistance`), SI `value`, explicit `range` from cached `source_controls`; requires standby, never enables output |
 | `configure_output` | `instrument`, driver-declared `control` (`voltage`, `current_limit`, optional `priority`, `ovp`, `ocp`), typed `value`; validates against cached `output_configuration.controls`, confirmed setter on acquisition owner, cancels an active sweep, never enables output |
-| `static`, `sweep`, `output`, `cancel_sweep` | Demo PSU/RD6006: `instrument`, `voltage`, optional `current_limit` on supported drivers; sweep `start`/`stop`/`step`/`dwell`; output `enabled` (also AOIP calibrators), real enable requires `wiring_confirmed=true` |
+| `static`, `sweep`, `output`, `cancel_sweep` | Demo PSU/RD6006: `instrument`, `voltage`, optional `current_limit` on supported drivers; sweep `start`/`stop`/`step`/`dwell`; output `enabled` (also AOIP calibrators), real enable requires `wiring_confirmed=true` or explicit manual `operator_confirmed=true` |
 | `query`, `write` | `instrument` and one model-specific `command`; requires HTTP raw access enabled |
 | `save_experiment`, `delete_experiment`, `check_experiment` | Save a definition object as `experiment`; delete/check by experiment ID, with `bindings` for checking |
 | `start_experiment`, `start_experiment_sequence`, `cancel_experiment` | Start a `test` with `parameters`, or an ordered `tests` list; both use `experiment`/`bindings` and explicit output/wiring confirmations where required; cancel stops the active sequence as well as its test |
@@ -346,7 +346,7 @@ CSV includes samples and derived UTC tick times. Event details remain in SQLite.
 
 Typed static/sweep/output control supports the demo PSU and [Riden RD6006 over USB](docs/riden.md). Inspect `output_control_supported`, `experiment_limits` and current readings before issuing an output request. RD6006 USB addresses use `riden:///dev/ttyUSB1?baud=115200&address=1`; add manually under USB, since Scan does not probe serial adapters.
 
-For RD6006, `static` accepts `voltage` and optional `current_limit` (amperes). Real output enable requires `enabled=true, wiring_confirmed=true`; disable needs only `enabled=false`. Driver bounds are 0–60 V and 0.001–6 A current limit, with confirmed register writes. Keep DUT limits separate. The RD6006 supports typed experiment voltage/current-limit controls; other Riden models and raw SCPI are unsupported. No enable state is replayed, and GATE attempts a verified disable on close for outputs it enabled.
+For RD6006, `static` accepts `voltage` and optional `current_limit` (amperes). Real output enable requires `enabled=true` and either `wiring_confirmed=true` or `operator_confirmed=true`. The standalone panel sends `operator_confirmed=true` when the user clicks **Enable output**, without asserting that wiring was checked. Experiments still require their separate `enable_outputs` and `wiring_confirmed` flags. Disable needs only `enabled=false`. Driver bounds are 0–60 V and 0.001–6 A current limit, with confirmed register writes. Keep DUT limits separate. The RD6006 supports typed experiment voltage/current-limit controls; other Riden models and raw SCPI are unsupported. No enable state is replayed, and GATE attempts a verified disable on close for outputs it enabled.
 
 ```python
 api.command('demo')

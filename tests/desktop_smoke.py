@@ -123,7 +123,12 @@ try:
             toggle = buttons.get_first_child()
             settings_button = toggle.get_next_sibling()
             trash = settings_button.get_next_sibling()
-            assert toggle.get_icon_name() == 'network-disconnect-symbolic'
+            action = toggle.get_child()
+            assert action.get_first_child().get_icon_name() == 'media-playback-stop-symbolic'
+            assert action.get_last_child().get_text() == 'Disconnect'
+            assert toggle.get_tooltip_text() == 'Disconnect'
+            theme = Gtk.IconTheme.get_for_display(window.get_display())
+            assert theme.has_icon(action.get_first_child().get_icon_name())
             assert settings_button.get_icon_name() == 'emblem-system-symbolic'
             assert trash.get_icon_name() == 'user-trash-symbolic'
             assert trash.get_next_sibling() is None
@@ -132,7 +137,11 @@ try:
             window.command.assert_called_once_with('disconnect', instrument=address, forget=False)
             fixture['instruments'] = []
             window.render_devices(fixture)
-            assert toggle.get_icon_name() == 'network-connect-symbolic'
+            assert toggle.get_child() is action
+            assert action.get_first_child().get_icon_name() == 'media-playback-start-symbolic'
+            assert action.get_last_child().get_text() == 'Connect'
+            assert toggle.get_tooltip_text() == 'Connect'
+            assert theme.has_icon(action.get_first_child().get_icon_name())
             window.command.reset_mock()
             toggle.emit('clicked')
             window.command.assert_called_once_with('connect', resource=address)

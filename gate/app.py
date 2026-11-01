@@ -657,7 +657,11 @@ class Window(Gtk.ApplicationWindow):
                 self.labels[resource] = self.label('', 'dim-label')
                 details.append(self.labels[resource])
                 actions = Gtk.Box(spacing=6)
-                toggle = self.icon_button('network-connect-symbolic', 'Connect', lambda resource=resource: self.connection_toggle(resource))
+                toggle = self.icon_button('media-playback-start-symbolic', 'Connect', lambda resource=resource: self.connection_toggle(resource))
+                connection_action = Gtk.Box(spacing=6)
+                connection_action.append(Gtk.Image.new_from_icon_name('media-playback-start-symbolic'))
+                connection_action.append(Gtk.Label(label='Connect'))
+                toggle.set_child(connection_action)
                 toggle.set_visible(resource not in orphans)
                 actions.append(toggle)
                 self.connect_buttons[resource] = toggle
@@ -682,7 +686,9 @@ class Window(Gtk.ApplicationWindow):
             button = self.connect_buttons[resource]
             connected = resource in self.connected
             title = 'Disconnect' if connected else 'Connect'
-            button.set_icon_name('network-disconnect-symbolic' if connected else 'network-connect-symbolic')
+            action = button.get_child()
+            action.get_first_child().set_from_icon_name('media-playback-stop-symbolic' if connected else 'media-playback-start-symbolic')
+            action.get_last_child().set_text(title)
             button.set_tooltip_text(title)
             button.update_property([Gtk.AccessibleProperty.LABEL], [title])
             if not self.online:

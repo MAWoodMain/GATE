@@ -729,8 +729,9 @@ class Engine:
             elif action == "output":
                 if not isinstance(args["enabled"], bool):
                     raise ValueError("enabled must be boolean")
-                if args["enabled"] and not instrument.simulated and args.get("wiring_confirmed") is not True:
-                    raise ValueError("Real output enable requires wiring_confirmed=true")
+                if (args["enabled"] and not instrument.simulated and
+                        args.get("wiring_confirmed") is not True and args.get("operator_confirmed") is not True):
+                    raise ValueError("Real output enable requires wiring_confirmed=true or operator_confirmed=true")
                 if not args["enabled"]:
                     self.sweeps.pop(instrument.id, None)
                 instrument.set_enabled(args["enabled"])

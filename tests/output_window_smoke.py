@@ -3,6 +3,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from gate.service import proxy, call
 import gi
@@ -69,6 +70,14 @@ try:
     wait_until(lambda: 'Output OFF' in window.state_label.get_text())
     state = call(proxy(), 'Snapshot')
     card = next(c for c in state['instruments'] if c['id'] == window.instrument)
+    card['simulated'] = False
+    window.render(state)
+    assert window.toggle.get_sensitive(), 'Manual enable still requires a checkbox'
+    assert not hasattr(window, 'wiring')
+    with patch.object(window, 'send') as send:
+        window.toggle_output()
+        send.assert_called_once_with('output', enabled=True, operator_confirmed=True)
+    card['simulated'] = True
     # Exercise optional controls without a real instrument or transport.
     card['output_configuration']['controls'].update(
         priority=dict(label='Priority', choices=['voltage', 'current']),

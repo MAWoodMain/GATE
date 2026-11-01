@@ -44,6 +44,25 @@ class OutputTests(unittest.TestCase):
         configure_output(driver, 'ovp', 20)
         driver.set_ovp.assert_called_once_with(20)
 
+    def test_manual_output_confirmation_does_not_require_wiring_checkbox(self):
+        transport = Registers()
+        driver = RidenRD6006(transport)
+        engine = Engine(.1)
+        engine.instruments[driver.id] = driver
+        args = dict(instrument=driver.id, enabled=True)
+        for confirmation in (None, False, 'true', 1):
+            with self.assertRaisesRegex(ValueError, 'operator_confirmed'):
+                engine.command('output', dict(args, operator_confirmed=confirmation))
+        self.assertFalse(transport.writes)
+        engine.command('output', dict(args, operator_confirmed=True))
+        self.assertEqual(transport.r[18], 1)
+        engine.command('output', dict(args, enabled=False))
+        self.assertEqual(transport.r[18], 0)
+        engine.experiment_run = Mock(active=True)
+        with self.assertRaisesRegex(ValueError, 'Stop the active experiment'):
+            engine.command('output', dict(args, operator_confirmed=True))
+        self.assertEqual(transport.r[18], 0)
+
     def test_demo_priority_and_protection_trip(self):
         driver = Simulated('power_supply')
         configure_output(driver, 'priority', 'current')

@@ -58,7 +58,9 @@ There is no extra slew limiting: static changes are immediate instrument
 setpoints; sweeps use explicit steps and dwell at least the polling interval.
 Setpoints/sweeps do not enable output. Enabling requires a positive in-range
 current limit, in-range voltage and no active protection, plus explicit
-wiring_confirmed=true through the standalone API. OVP/OCP configuration is
+`wiring_confirmed=true` or `operator_confirmed=true` through the standalone API.
+The manual output panel treats clicking Enable as operator confirmation and has
+no wiring checkbox; experiment wiring confirmations remain separate. OVP/OCP configuration is
 preserved. A multi-field static change is not transactional if later I/O fails.
 
 Output changes and reads execute on the acquisition owner. Controls are blocked
