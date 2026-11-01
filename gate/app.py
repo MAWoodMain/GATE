@@ -383,8 +383,8 @@ class Window(Gtk.ApplicationWindow):
             baud.set_selected(rates.index(current) if current in rates else 5)
             content.append(baud)
             content.append(self.label('Protocol', 'device-title'))
-            protocol = Gtk.DropDown.new_from_strings(['Fluke 45', 'AOIP SN-8310 / PJ-6301'])
-            protocol.set_selected(1 if url.scheme == 'aoip' else 0)
+            protocol = Gtk.DropDown.new_from_strings(['Fluke 45', 'AOIP SN-8310 / PJ-6301', 'TTi PL-P (9600 8N1)'])
+            protocol.set_selected({'aoip': 1, 'plp': 2}.get(url.scheme, 0))
             content.append(protocol)
             aoip_options = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
             content.append(aoip_options)
@@ -406,19 +406,24 @@ class Window(Gtk.ApplicationWindow):
             idle.set_digits(2)
             idle.set_value(float(options.get('idle', ['0.2'])[0]))
             aoip_options.append(idle)
-            aoip_options.set_visible(protocol.get_selected() == 1)
-            protocol.connect('notify::selected', lambda *_: aoip_options.set_visible(protocol.get_selected() == 1))
-            content.append(self.label('Match the instrument settings. Fluke uses 8N1. Prefer a stable /dev/serial/by-id/ path.', 'dim-label'))
+            def protocol_changed(*_):
+                aoip_options.set_visible(protocol.get_selected() == 1)
+                baud.set_sensitive(protocol.get_selected() != 2)
+                if protocol.get_selected() == 2:
+                    baud.set_selected(rates.index('9600'))
+            protocol_changed()
+            protocol.connect('notify::selected', protocol_changed)
+            content.append(self.label('Match the instrument settings. Fluke uses 8N1; PL-P uses fixed 9600 8N1. Prefer a stable /dev/serial/by-id/ path.', 'dim-label'))
         elif kind == 'Network':
             fields['host'] = entry('Host or IP address', url.hostname or '', '192.168.1.100')
             fields['port'] = entry('TCP port', str(url.port or 5025), '5025')
-            content.append(self.label('Raw SCPI TCP connections. Automatic LAN discovery is not available.', 'dim-label'))
+            content.append(self.label('Raw text TCP connections; TTi PL-P uses port 9221. Automatic LAN discovery is not available.', 'dim-label'))
         else:
             fields['path'] = entry('USB address' if kind == 'USB' else 'TMC device path', identity or '', 'riden:///dev/ttyUSB1 or hantek://usb/3-1' if kind == 'USB' else '/dev/usbtmc0')
             content.append(self.label('Scan finds USBTMC/Hantek devices. For RD6006 enter riden:///dev/serial/by-id/…?baud=115200&address=1. Serial adapters are not automatically probed.', 'dim-label'))
         def read():
             if kind == 'Serial':
-                scheme = 'aoip' if protocol.get_selected() == 1 else 'serial'
+                scheme = ['serial', 'aoip', 'plp'][protocol.get_selected()]
                 resource = f"{scheme}://{fields['path'].get_text().strip()}?baud={rates[baud.get_selected()]}"
                 if scheme == 'aoip':
                     resource += ''.join(f'&{key}={choices[widget.get_selected()]}' for key, (widget, choices) in serial_options.items())

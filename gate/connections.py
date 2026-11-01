@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 def communication_type(resource):
     if resource.startswith(('hantek://', 'riden://')):
         return 'USB'
-    if resource.startswith(('serial://', 'aoip://')):
+    if resource.startswith(('serial://', 'aoip://', 'plp://')):
         return 'Serial'
     if resource.startswith('tcp://'):
         return 'Network'
@@ -20,6 +20,9 @@ def validate_resource(resource):
         raise ValueError('Enter a connection address without spaces')
     if re.fullmatch(r'/dev/usbtmc[0-9]+', resource):
         return resource
+    if resource.startswith('plp://'):
+        from gate.plp_serial import connection
+        return connection(resource)[0]
     if resource.startswith('aoip://'):
         from gate.aoip_serial import connection
         return connection(resource)[0]
@@ -42,4 +45,4 @@ def validate_resource(resource):
         if url.path or url.query or url.fragment or not 1 <= (url.port if url.port is not None else 5025) <= 65535:
             raise ValueError('Use tcp://host:port for a raw SCPI connection')
         return resource
-    raise ValueError('Use aoip:///dev/ttyUSB0, /dev/usbtmcN, hantek://usb/PORT, riden:///dev/ttyUSB1, serial:///dev/ttyUSB0?baud=9600 or tcp://host:5025')
+    raise ValueError('Use plp:///dev/ttyACM0, aoip:///dev/ttyUSB0, /dev/usbtmcN, hantek://usb/PORT, riden:///dev/ttyUSB1, serial:///dev/ttyUSB0?baud=9600 or tcp://host:5025')
