@@ -672,7 +672,7 @@ class Engine:
         elif action in ("query", "write"):
             instrument = self.instruments[self.resolve(args["instrument"])]
             transport = getattr(instrument, "transport", None)
-            if transport is None:
+            if transport is None or not callable(getattr(transport, action, None)):
                 raise ValueError("This instrument has no raw command transport")
             text = args["command"]
             if not isinstance(text, str) or not 0 < len(text) <= 256 or any(c in text for c in "\r\n;"):
@@ -701,27 +701,32 @@ class Engine:
             self.state["recording"] = False
         elif action in ("static", "sweep", "output", "cancel_sweep"):
             instrument = self.instruments[self.resolve(args["instrument"])]
-            if instrument.category != "power_supply" or not instrument.simulated:
-                raise ValueError("Output control currently supported on the demo PSU only")
+            if instrument.category != "power_supply" or not (instrument.simulated or getattr(instrument, "output_control_supported", False)):
+                raise ValueError("This driver has no verified output control")
+            maximum = getattr(instrument, "experiment_limits", {}).get("voltage", [0., 30.])[1]
             if action == "static":
                 voltage = float(args["voltage"])
+                if "current_limit" in args:
+                    instrument.set_current_limit(float(args["current_limit"]))
                 instrument.set_voltage(voltage)
                 self.sweeps.pop(instrument.id, None)
             elif action == "output":
                 if not isinstance(args["enabled"], bool):
                     raise ValueError("enabled must be boolean")
-                instrument.set_enabled(args["enabled"])
+                if args["enabled"] and not instrument.simulated and args.get("wiring_confirmed") is not True:
+                    raise ValueError("Real output enable requires wiring_confirmed=true")
                 if not args["enabled"]:
                     self.sweeps.pop(instrument.id, None)
+                instrument.set_enabled(args["enabled"])
             elif action == "cancel_sweep":
                 self.sweeps.pop(instrument.id, None)
             else:
                 start, stop, step, dwell = [float(args[k]) for k in ("start", "stop", "step", "dwell")]
                 if not all(math.isfinite(x) for x in (start, stop, step, dwell)):
                     raise ValueError("Sweep values must be finite")
-                if not (0 <= start <= 30 and 0 <= stop <= 30 and step != 0 and
+                if not (0 <= start <= maximum and 0 <= stop <= maximum and step != 0 and
                         (stop-start)*step >= 0 and dwell >= self.interval):
-                    raise ValueError("Sweep requires 0–30 V, a step towards stop, dwell >= polling interval")
+                    raise ValueError(f"Sweep requires 0–{maximum:g} V, a step towards stop, dwell >= polling interval")
                 instrument.set_voltage(start)
                 self.sweeps[instrument.id] = dict(value=start, stop=stop, step=step,
                                                 dwell=dwell, due=time.monotonic()+dwell)
@@ -774,6 +779,7 @@ class Engine:
                               settings=copy.deepcopy(profile.get('settings', {})), category=instrument.category,
                               simulated=instrument.simulated, readings=[asdict(r) for r in readings],
                               experiment_capabilities=list(getattr(instrument, 'experiment_capabilities', ())),
+                              output_control_supported=bool(getattr(instrument, "output_control_supported", False) or instrument.simulated and instrument.category == "power_supply"),
                               experiment_control_supported=bool(getattr(instrument, 'experiment_control_supported', False)),
                               experiment_limits=copy.deepcopy(getattr(instrument, 'experiment_limits', {})),
                               range_controls=range_catalog(instrument),

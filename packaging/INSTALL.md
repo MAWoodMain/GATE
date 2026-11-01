@@ -36,7 +36,7 @@ gnome-extensions enable gate@mawoodmain.github.io
 
 GNOME caches extension code, so updates also require a new login to load changed JavaScript. The service itself can be restarted without a logout.
 
-For USB access, unplug/reconnect the scope after installation. For a USB serial meter, your account must be permitted to open the serial port, normally through `dialout`. Configure the Fluke 45 as 9600 baud, no parity and add its endpoint in the device manager. The included agent guide explains the connection and API.
+For USB access, unplug/reconnect the scope after installation. For a USB serial meter, your account must be permitted to open the serial port, normally through `dialout`. Configure the Fluke 45 as 9600 baud, no parity and add its endpoint in the device manager. For the RD6006 USB serial supply, use the USB address format in the [Riden guide](../docs/riden.md); the account likewise needs serial-port access. The included agent guide explains the connection and API.
 
 ## Agent API
 

@@ -88,7 +88,7 @@ when disabled. Examples and constraints follow below or in the linked contracts.
 | `settings` | Service-wide polling `interval` in seconds, 0.1–60 |
 | `demo`, `demo_experiment` | Add the original demo instruments or the coupled converter/observation bench; do not enable outputs |
 | `record`, `stop_recording` | Start ordinary all-device logging at `path`, or stop it |
-| `static`, `sweep`, `output`, `cancel_sweep` | Original demo PSU: `instrument`, `voltage`; sweep `start`/`stop`/`step`/`dwell`; output `enabled` |
+| `static`, `sweep`, `output`, `cancel_sweep` | Demo PSU/RD6006: `instrument`, `voltage`, optional `current_limit` on supported drivers; sweep `start`/`stop`/`step`/`dwell`; output `enabled`, real enable requires `wiring_confirmed=true` |
 | `query`, `write` | `instrument` and one model-specific `command`; requires HTTP raw access enabled |
 | `save_experiment`, `delete_experiment`, `check_experiment` | Save a definition object as `experiment`; delete/check by experiment ID, with `bindings` for checking |
 | `start_experiment`, `start_experiment_sequence`, `cancel_experiment` | Start a `test` with `parameters`, or an ordered `tests` list; both use `experiment`/`bindings` and explicit output/wiring confirmations where required; cancel stops the active sequence as well as its test |
@@ -325,7 +325,9 @@ CSV includes samples and derived UTC tick times. Event details remain in SQLite.
 
 ## Output controls
 
-Typed static/sweep/output control currently supports the demo PSU only; no real PSU driver is installed. Inspect capabilities and support before issuing an output request.
+Typed static/sweep/output control supports the demo PSU and [Riden RD6006 over USB](docs/riden.md). Inspect `output_control_supported`, `experiment_limits` and current readings before issuing an output request. RD6006 USB addresses use `riden:///dev/ttyUSB1?baud=115200&address=1`; add manually under USB, since Scan does not probe serial adapters.
+
+For RD6006, `static` accepts `voltage` and optional `current_limit` (amperes). Real output enable requires `enabled=true, wiring_confirmed=true`; disable needs only `enabled=false`. Driver bounds are 0–60 V and 0.001–6 A current limit, with confirmed register writes. Keep DUT limits separate. The RD6006 supports typed experiment voltage/current-limit controls; other Riden models and raw SCPI are unsupported. No enable state is replayed, and GATE attempts a verified disable on close for outputs it enabled.
 
 ```python
 api.command('demo')
@@ -434,7 +436,7 @@ run or sequence. Disconnect/forget/connection editing first cancels the active
 execution. Changing saved definitions does not mutate a running snapshot. Output
 tests attempt verified output disable on completion, failure, cancellation and
 graceful shutdown; communications loss, forced termination or power failure can
-prevent it. No verified real PSU/load driver is currently shipped.
+prevent it. RD6006 typed PSU controls are protocol-tested and low-voltage bench-verified; real electronic-load drivers remain unavailable. See [RD6006 verification status](docs/riden.md).
 
 Existing experiment JSON needs no migration for the channel/range interface:
 its scalar `channel` still identifies a **reading key**, not an instrument channel
