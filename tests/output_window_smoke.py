@@ -46,17 +46,25 @@ try:
     row = window.rows['voltage']
     row['editor'].set_text('3.3')
     wait_until(lambda: not window.polling)
+    row['editor'].grab_focus()
     window.render(call(proxy(), 'Snapshot'))
+    assert window.rows['voltage']['editor'] is row['editor']
+    focus = window.get_focus()
+    assert focus == row['editor'] or focus.is_ancestor(row['editor'])
+    visible, bounds = window.toggle.compute_bounds(window)
+    assert visible and bounds.get_y() + bounds.get_height() <= window.get_height(), 'Output button clipped'
     assert row['editor'].get_text() == '3.3', 'Polling overwrote a typed edit'
-    window.apply_control('voltage')
+    row['editor'].emit('activate')
     wait_until(lambda: window.pending is None)
     window.toggle_output()
     wait_until(lambda: 'OUTPUT ON' in window.state_label.get_text())
-    assert 'Calculated power:' in window.readback.get_text()
+    assert 'power calculated from V × A' in window.readback.get_text()
+    assert window.metric_values['power'].get_text() != '—'
     row['editor'].set_text('nan')
     window.apply_control('voltage')
     assert not window.pending
     assert 'limits' in window.status.get_text()
+    assert row['editor'].has_css_class('error')
     window.toggle_output()
     wait_until(lambda: 'Output OFF' in window.state_label.get_text())
     state = call(proxy(), 'Snapshot')
@@ -73,11 +81,12 @@ try:
                         dict(channel='voltage', value=5., unit='V', quality='overload'),
                         dict(channel='current', value=.1, unit='A', quality='ok')]
     window.render(state)
-    assert 'Calculated power: unavailable' in window.readback.get_text()
+    assert window.metric_values['power'].get_text() == '—'
+    assert window.metric_values['voltage'].get_text() == '—'
     state['instruments'] = []
     window.render(state)
     assert not window.toggle.get_sensitive()
-    assert 'offline' in window.state_label.get_text()
+    assert window.state_label.get_text() == 'OFFLINE'
     window.close()
 finally:
     process.terminate()
