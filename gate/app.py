@@ -476,29 +476,82 @@ class Window(Gtk.ApplicationWindow):
             instrument_page.append(self.label('Instrument name', 'device-title'))
             name = Gtk.Entry(text=profile.get('name', ''), placeholder_text='Use model name', max_length=80)
             instrument_page.append(name)
-            instrument_page.append(self.label('Measurement function', 'device-title'))
             functions = profile.get('functions', [])
-            selected = profile.get('settings', {}).get('function')
-            choices = ['Keep current instrument function'] + [item['label'] for item in functions]
-            function = Gtk.DropDown.new_from_strings(choices)
-            function.set_selected(next((index+1 for index, item in enumerate(functions) if item['id'] == selected), 0))
-            instrument_page.append(function)
-            instrument_page.append(self.label('Names and saved functions follow this instrument across all connections. Saved functions are reapplied when it connects.', 'dim-label'))
+            channel_labels = {item['id']: item['label'] for item in profile.get('channels', [])}
+            function_selectors = {}
+            saved = profile.get('settings', {})
+            for channel in dict.fromkeys(item.get('instrument_channel', 'primary') for item in functions):
+                channel_functions = [item for item in functions if item.get('instrument_channel', 'primary') == channel]
+                instrument_page.append(self.label(channel_labels.get(channel, channel.title())+' function', 'device-title'))
+                selected = saved.get('channel_functions', {}).get(channel, saved.get('function'))
+                selector = Gtk.DropDown.new_from_strings(['Keep current channel function'] + [item['label'] for item in channel_functions])
+                selector.set_selected(next((index+1 for index, item in enumerate(channel_functions) if item['id'] == selected), 0))
+                instrument_page.append(selector)
+                function_selectors[channel] = (channel_functions, selector)
+            range_selectors = {}
+            range_rows = []
+            controls = profile.get('range_controls', [])
+            saved_ranges = profile.get('settings', {}).get('ranges', {})
+            for control in controls:
+                row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+                row.append(self.label(control['label']+' range', 'device-title'))
+                selector = Gtk.DropDown.new_from_strings(['Keep instrument range'] + [option['label'] for option in control['options']])
+                selector.set_selected(next((index+1 for index, option in enumerate(control['options'])
+                                            if option['id'] == saved_ranges.get(control['id'])), 0))
+                row.append(selector)
+                instrument_page.append(row)
+                range_selectors[control['id']] = (control, selector)
+                range_rows.append((control, row))
+            if controls:
+                hint = self.label('Saved ranges apply when their measurement function is selected. Keep instrument range removes the saved override.', 'dim-label')
+                instrument_page.append(hint)
+                def show_ranges(*_):
+                    card = next((item for item in self.view_state.get('instruments', []) if item['id'] == key), {})
+                    active = dict(card.get('current_functions', {'primary': card.get('current_function')}))
+                    for channel, (channel_functions, selector) in function_selectors.items():
+                        index = selector.get_selected()
+                        if index:
+                            active[channel] = channel_functions[index-1]['id']
+                    for control, row in range_rows:
+                        row.set_visible(control.get('function') is None or control['function'] == active.get(control.get('instrument_channel', 'primary')))
+                for _, selector in function_selectors.values():
+                    selector.connect('notify::selected', show_ranges)
+                show_ranges()
+            else:
+                instrument_page.append(self.label(profile.get('range_unavailable_reason') or 'This driver has no selectable measurement ranges.', 'dim-label'))
+            instrument_page.append(self.label('Names, saved functions and ranges follow this instrument across all connections and are reapplied when it connects.', 'dim-label'))
             def save_instrument():
-                index = function.get_selected()
                 settings = dict(profile.get('settings', {}))
                 settings.pop('function', None)
-                if index:
-                    chosen = functions[index-1]
-                    settings['function'] = chosen['id']
-                    group = chosen.get('exclusive_group') or ('primary' if chosen.get('configurable') else None)
-                    catalog = {item['id']:item for item in functions}
-                    def same_group(identity):
-                        item = catalog.get(identity, {})
-                        return group and (item.get('exclusive_group') or ('primary' if item.get('configurable') else None)) == group
-                    shown = settings.get('display_functions')
-                    if shown is not None and any(same_group(identity) for identity in shown):
-                        settings['display_functions'] = [identity for identity in shown if not same_group(identity)] + [chosen['id']]
+                settings.pop('channel_functions', None)
+                ranges = dict(settings.get('ranges', {}))
+                for identity, (control, selector) in range_selectors.items():
+                    range_index = selector.get_selected()
+                    if range_index:
+                        ranges[identity] = control['options'][range_index-1]['id']
+                    else:
+                        ranges.pop(identity, None)
+                if ranges:
+                    settings['ranges'] = ranges
+                else:
+                    settings.pop('ranges', None)
+                def group(item):
+                    exclusive = item.get('exclusive_group') or ('primary' if item.get('configurable') else None)
+                    return (item.get('instrument_channel', 'primary'), exclusive) if exclusive else None
+                catalog = {item['id']:item for item in functions}
+                for channel, (channel_functions, selector) in function_selectors.items():
+                    index = selector.get_selected()
+                    if index:
+                        chosen = channel_functions[index-1]
+                        if len(function_selectors) == 1 and channel == 'primary':
+                            settings['function'] = chosen['id']
+                        else:
+                            settings.setdefault('channel_functions', {})[channel] = chosen['id']
+                        chosen_group = group(chosen)
+                        shown = settings.get('display_functions')
+                        if shown is not None and chosen_group and any(group(catalog.get(identity, {})) == chosen_group for identity in shown):
+                            settings['display_functions'] = [identity for identity in shown
+                                if group(catalog.get(identity, {})) != chosen_group] + [chosen['id']]
                 self.command('instrument_settings', instrument=key, name=name.get_text(), settings=settings)
                 dialog.destroy()
             instrument_page.append(self.button('Save Instrument Settings', save_instrument))

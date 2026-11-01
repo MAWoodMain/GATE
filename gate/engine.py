@@ -14,6 +14,8 @@ from gate.connections import validate_resource
 from gate.identity import identify, migrate
 from gate.drivers.simulated import Simulated, ConverterBench, SimulatedThermometer, SimulatedWaveformRecorder
 from gate.model import Reading, MeasurementFunction
+from gate.ranges import range_catalog, range_option, validate_ranges, apply_ranges
+from gate.channels import channel_catalog, current_functions, function_group
 from gate.storage import Recorder
 from gate.experiments import BUCK_CONVERTER, validate_definition, check_bindings
 from gate.experiment_runs import ExperimentPlan, ExperimentRun, data_directory, history
@@ -148,6 +150,10 @@ class Engine:
                 card['experiment_capabilities'] = list(getattr(instrument, 'experiment_capabilities', ()))
                 card['experiment_control_supported'] = bool(getattr(instrument, 'experiment_control_supported', False))
                 card['experiment_limits'] = copy.deepcopy(getattr(instrument, 'experiment_limits', {}))
+                card['range_controls'] = range_catalog(instrument)
+                card['channels'] = channel_catalog(instrument, self.functions(instrument))
+                card['current_functions'] = current_functions(instrument)
+                card['range_unavailable_reason'] = getattr(instrument, 'range_unavailable_reason', '') if not card['range_controls'] else ''
                 card['waveform_capabilities'] = copy.deepcopy(getattr(instrument, 'waveform_capabilities', {}))
                 card['experiment_channels'] = copy.deepcopy(getattr(instrument, 'experiment_channels', {}))
                 card.update(name=profile['name'] or instrument.name, custom_name=profile['name'], resource=resource, instrument_id=key,
@@ -165,17 +171,38 @@ class Engine:
             os.replace(temporary, self.profile_path)
 
     def function_group(self, function):
-        return function.exclusive_group or ('primary' if function.configurable else None)
+        return function_group(function)
+
+    def remember_function(self, settings, function, functions):
+        if len({item.instrument_channel for item in functions}) > 1 or function.instrument_channel != 'primary':
+            settings.setdefault('channel_functions', {})[function.instrument_channel] = function.id
+            settings.pop('function', None)
+        else:
+            settings['function'] = function.id
 
     def validate_settings(self, key, settings):
-        if not isinstance(settings, dict) or set(settings) - {'function', 'display_functions'}:
-            raise ValueError('Supported instrument settings: function, display_functions')
+        if not isinstance(settings, dict) or set(settings) - {'function', 'channel_functions', 'display_functions', 'ranges'}:
+            raise ValueError('Supported instrument settings: function, channel_functions, display_functions, ranges')
         instrument = self.instruments.get(key)
+        catalog_ranges = range_catalog(instrument) if instrument else self.instrument_profiles[key].get('range_controls', [])
+        validate_ranges(catalog_ranges, settings.get('ranges', {}))
         functions = self.functions(instrument) if instrument else [
             MeasurementFunction(**item) for item in self.instrument_profiles[key].get('functions', [])]
         catalog = {item.id: item for item in functions}
         if 'function' in settings and (not isinstance(settings['function'], str) or settings['function'] not in catalog):
             raise ValueError('Unsupported measurement function for this instrument')
+        channel_functions = settings.get('channel_functions', {})
+        if not isinstance(channel_functions, dict):
+            raise ValueError('channel_functions must map channel IDs to function IDs')
+        for channel, identity in channel_functions.items():
+            if not isinstance(identity, str) or identity not in catalog or catalog[identity].instrument_channel != channel:
+                raise ValueError('Unsupported function for this instrument channel')
+        saved_functions = list(channel_functions.values())
+        if 'function' in settings:
+            legacy = catalog[settings['function']]
+            if legacy.instrument_channel in channel_functions and channel_functions[legacy.instrument_channel] != legacy.id:
+                raise ValueError('Conflicting saved functions for the same channel')
+            saved_functions.append(legacy.id)
         if 'display_functions' in settings:
             selected = settings['display_functions']
             if not isinstance(selected, list) or any(not isinstance(item, str) or item not in catalog for item in selected):
@@ -185,19 +212,26 @@ class Engine:
             groups = [self.function_group(catalog[item]) for item in selected if self.function_group(catalog[item])]
             if len(set(groups)) != len(groups):
                 raise ValueError('Choose only one measurement per exclusive function group')
-            if 'function' in settings:
-                function = catalog[settings['function']]
+            for identity in saved_functions:
+                function = catalog[identity]
                 group = self.function_group(function)
                 if group and any(self.function_group(catalog[item]) == group and item != function.id for item in selected):
                     raise ValueError('Saved function must match the displayed function in its exclusive group')
 
     def apply_settings(self, instrument, settings):
+        validate_ranges(range_catalog(instrument), settings.get('ranges', {}))
         catalog = {item.id: item for item in self.functions(instrument)}
         chosen = []
         if 'function' in settings:
             if settings['function'] not in catalog:
                 raise ValueError('Saved measurement function is unsupported by this driver')
             chosen.append(catalog[settings['function']])
+        for channel, identity in settings.get('channel_functions', {}).items():
+            if identity not in catalog or catalog[identity].instrument_channel != channel:
+                raise ValueError('Saved channel function is unsupported by this driver')
+            function = catalog[identity]
+            chosen = [item for item in chosen if self.function_group(item) != self.function_group(function)]
+            chosen.append(function)
         for identity in settings.get('display_functions', []):
             if identity not in catalog:
                 raise ValueError('Saved display function is unsupported by this driver')
@@ -208,6 +242,7 @@ class Engine:
         for function in chosen:
             if function.configurable:
                 instrument.select_function(function.id)
+        apply_ranges(instrument, settings)
 
     def connect_resource(self, resource, reconnect=False, automatic=False):
         current = self.resolve(resource)
@@ -231,6 +266,9 @@ class Engine:
                 name='', settings={}, auto_connect=True)
         record['category'] = instrument.category
         record['functions'] = [asdict(item) for item in self.functions(instrument)]
+        record['range_controls'] = range_catalog(instrument)
+        record['channels'] = channel_catalog(instrument, self.functions(instrument))
+        record['range_unavailable_reason'] = getattr(instrument, 'range_unavailable_reason', '') if not record['range_controls'] else ''
         profile = self.instrument_profiles.get(key, record)
         if automatic and not profile.get('auto_connect', True):
             instrument.close()
@@ -252,6 +290,8 @@ class Engine:
             if connection.get('instrument') == key:
                 connection['enabled'] = False
         profile.update(category=record['category'], functions=record['functions'], identity=record['identity'], auto_connect=True)
+        profile.update(range_controls=record['range_controls'], range_unavailable_reason=record['range_unavailable_reason'])
+        profile['channels'] = record['channels']
         self.instrument_profiles[key] = profile
         self.saved_resources.discard(resource)
         self.saved_resources.add(address)
@@ -343,7 +383,7 @@ class Engine:
                     self.experiment_run.finish('cancelled', 'Equipment configuration changed')
                 self.publish_experiment()
             elif action in ('settings', 'scan', 'connect', 'query', 'write', 'static', 'sweep', 'output',
-                            'cancel_sweep', 'select_function', 'display_measurements', 'instrument_settings',
+                            'cancel_sweep', 'select_function', 'select_range', 'display_measurements', 'instrument_settings',
                             'copy_settings', 'start_experiment', 'start_experiment_sequence', 'demo_experiment'):
                 raise ValueError('Stop the active experiment before changing equipment or acquisition settings')
         if action == 'start_experiment_sequence':
@@ -421,7 +461,12 @@ class Engine:
                     self.instruments[key] = Simulated(category)
                     self.instrument_profiles.setdefault(key, dict(type=key, manufacturer='GATE', model=category,
                         serial='demo', identity=self.instruments[key].name, name='', settings={}, functions=[asdict(item) for item in self.instruments[key].functions()],
-                        category=category, auto_connect=False))
+                        category=category, auto_connect=False,
+                        range_controls=range_catalog(self.instruments[key]),
+                        range_unavailable_reason=getattr(self.instruments[key], 'range_unavailable_reason', '') if not range_catalog(self.instruments[key]) else ''))
+                    self.instrument_profiles[key]['range_controls'] = range_catalog(self.instruments[key])
+                    self.instrument_profiles[key]['channels'] = channel_catalog(self.instruments[key])
+                    self.apply_settings(self.instruments[key], self.instrument_profiles[key]['settings'])
             self.save_profile()
             self.state["demo"] = True
         elif action == "edit_device":
@@ -509,6 +554,11 @@ class Engine:
             profile = self.instrument_profiles[key]
             settings = copy.deepcopy(profile['settings'])
             settings['display_functions'] = copy.deepcopy(args['functions'])
+            range_updates = args.get('ranges', {})
+            if not isinstance(range_updates, dict):
+                raise ValueError('ranges must map range control IDs to choice IDs')
+            if range_updates:
+                settings.setdefault('ranges', {}).update(copy.deepcopy(range_updates))
             instrument = self.instruments.get(key)
             catalog = {item['id']: MeasurementFunction(**item) for item in profile.get('functions', [])}
             if instrument:
@@ -516,20 +566,29 @@ class Engine:
             if isinstance(settings['display_functions'], list):
                 for identity in settings['display_functions']:
                     if isinstance(identity, str) and identity in catalog and catalog[identity].configurable:
-                        settings['function'] = identity
+                        self.remember_function(settings, catalog[identity], catalog.values())
             self.validate_settings(key, settings)
             # Hiding never changes hardware configuration. Only newly checked
             # configurable functions switch a device, and must confirm before saving.
             for identity in settings['display_functions']:
                 function = catalog[identity]
                 if function.configurable:
-                    if instrument and identity not in profile['settings'].get('display_functions', []) and getattr(instrument, 'current_function', None) != identity:
+                    if instrument and identity not in profile['settings'].get('display_functions', []) and current_functions(instrument).get(function.instrument_channel) != identity:
                         instrument.select_function(identity)
-                    settings['function'] = identity
+                        restore = dict(settings, ranges={key: value for key, value in settings.get('ranges', {}).items()
+                                                        if key not in range_updates})
+                        apply_ranges(instrument, restore, identity)
+                    self.remember_function(settings, function, catalog.values())
+            if instrument:
+                # Explicit preferences from the top bar (including its default
+                # Auto choice) are applied after switching the requested modes.
+                for control_id, option_id in range_updates.items():
+                    instrument.select_range(control_id, option_id)
             profile['settings'] = settings
             self.save_profile()
             if self.recorder:
-                self.recorder.event(time.monotonic_ns()-self.origin, key, f'display_measurements: {settings["display_functions"]}')
+                self.recorder.event(time.monotonic_ns()-self.origin, key,
+                    f'display_measurements: {settings["display_functions"]}' + (f' ranges: {range_updates}' if range_updates else ''))
             self._status('Top-bar measurements saved')
             return dict(instrument=key, functions=settings['display_functions'])
         elif action in ('instrument_settings', 'copy_settings'):
@@ -566,6 +625,18 @@ class Engine:
             self.interval = interval
             self.save_profile()
             self._status("Acquisition settings saved")
+        elif action == 'select_range':
+            key = self.resolve(args['instrument'])
+            instrument = self.instruments[key]
+            control, option = range_option(instrument, args['control'], args['range'])
+            instrument.select_range(control.id, option.id)
+            profile = self.instrument_profiles[key]
+            profile['settings'].setdefault('ranges', {})[control.id] = option.id
+            self.save_profile()
+            if self.recorder:
+                self.recorder.event(time.monotonic_ns()-self.origin, key, f'select_range: {control.id} {option.id}')
+            self._status('Instrument range selected')
+            return dict(instrument=key, control=control.id, range=option.id)
         elif action == "select_function":
             request = str(args.get("request") or uuid.uuid4())
             result = dict(instrument=args.get("instrument"), function=args.get("function"))
@@ -577,7 +648,8 @@ class Engine:
                     instrument.select_function(function.id)
                 profile = self.instrument_profiles.get(instrument.id)
                 if profile is not None:
-                    profile['settings']['function'] = function.id
+                    apply_ranges(instrument, profile['settings'], function.id)
+                    self.remember_function(profile['settings'], function, functions.values())
                     displayed = profile['settings'].get('display_functions')
                     group = self.function_group(function)
                     if displayed is not None and group and any(
@@ -704,6 +776,10 @@ class Engine:
                               experiment_capabilities=list(getattr(instrument, 'experiment_capabilities', ())),
                               experiment_control_supported=bool(getattr(instrument, 'experiment_control_supported', False)),
                               experiment_limits=copy.deepcopy(getattr(instrument, 'experiment_limits', {})),
+                              range_controls=range_catalog(instrument),
+                              channels=channel_catalog(instrument, self.functions(instrument, readings)),
+                              current_functions=current_functions(instrument),
+                              range_unavailable_reason=(getattr(instrument, 'range_unavailable_reason', '') if not range_catalog(instrument) else ''),
                               waveform_capabilities=copy.deepcopy(getattr(instrument, 'waveform_capabilities', {})),
                               experiment_channels=copy.deepcopy(getattr(instrument, 'experiment_channels', {})),
                               error=error, sweep=key in self.sweeps,

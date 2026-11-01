@@ -5,6 +5,7 @@ See docs/keysight344xxa.md for supported models, acquisition and verification.
 import math
 import re
 from gate.model import MeasurementFunction, Reading
+from gate.ranges import numeric_control, range_option
 
 MODELS = {'34401A', '34410A', '34411A', '34460A', '34461A', '34465A', '34470A'}
 MAKERS = {'KEYSIGHT TECHNOLOGIES', 'KEYSIGHT', 'AGILENT TECHNOLOGIES', 'AGILENT',
@@ -66,6 +67,58 @@ class Keysight344xxA:
     def functions(self):
         return [MeasurementFunction(key, label, channel, unit, True, 'primary')
                 for key, (label, channel, unit, _) in self._functions.items()]
+
+    def range_controls(self):
+        # Catalogs are model-specific. Selection never changes current terminals.
+        dc_current = [1e-4, 1e-3, .01, .1, 1., 3.]
+        if self.model == '34401A':
+            dc_current = [.01, .1, 1., 3.]
+        elif self.model in {'34465A', '34470A'}:
+            dc_current = [1e-6, 1e-5] + dc_current
+        ac_current = [1e-4, .001, .01, .1, 1., 3.] if self.model != '34401A' else [1., 3.]
+        if self.model in {'34461A', '34465A', '34470A'}:
+            dc_current.append(10.)
+            ac_current.append(10.)
+        resistance = [100., 1e3, 1e4, 1e5, 1e6, 1e7, 1e8]
+        if self.model in {'34410A', '34411A', '34465A', '34470A'}:
+            resistance += [1e9]
+        values = dict(VDC=[.1, 1., 10., 100., 1000.], VAC=[.1, 1., 10., 100., 750.],
+                      ADC=dc_current, AAC=ac_current, OHMS=resistance, OHMS4=resistance)
+        if self.model != '34401A':
+            values['CAP'] = [1e-9, 1e-8, 1e-7, 1e-6, 1e-5]
+            if self._truevolt:
+                values['CAP'].append(1e-4)
+        return [numeric_control(key, self._functions[key][0], self._functions[key][2], bounds, key)
+                for key, bounds in values.items()]
+
+    def range_function(self):
+        self.current_function = self._function()
+        return self.current_function
+
+    def range_functions(self):
+        return {'primary': self.range_function()}
+
+    def select_range(self, control_id, option_id):
+        control, option = range_option(self, control_id, option_id)
+        if self.range_function() != control.function:
+            raise ValueError('Select the matching measurement function before its range')
+        command = 'SENS:'+self._functions[control.function][3]+':RANG'
+        if control.function in ('ADC', 'AAC') and option.value == 10.:
+            terminal = float(self.transport.query('SENS:'+self._functions[control.function][3]+':TERM?'))
+            if terminal != 10.:
+                raise ValueError('Select the 10 A current terminal on the meter before choosing this range')
+        if option.automatic:
+            self.transport.write(command+':AUTO ON')
+        else:
+            self.transport.write(command+' '+format(option.value, '.12g'))
+        automatic = self.transport.query(command+':AUTO?').strip().upper()
+        expected = ('1', 'ON') if option.automatic else ('0', 'OFF')
+        confirmed = automatic in expected
+        if not option.automatic:
+            actual = float(self.transport.query(command+'?'))
+            confirmed &= math.isclose(actual, option.value, rel_tol=1e-6, abs_tol=0.)
+        if self.range_function() != control.function or not confirmed:
+            raise ValueError('Keysight DMM did not confirm the requested range')
 
     def _function(self):
         native = self.transport.query('SENS:FUNC?').strip().strip('"').upper()

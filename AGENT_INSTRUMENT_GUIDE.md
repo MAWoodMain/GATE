@@ -1,5 +1,12 @@
 # GATE instrument guide for agents
 
+Instruments publish `channels`, channel-owned `functions`, `current_functions`
+and driver-declared `range_controls`. Use `select_range` with catalog IDs for
+manual range selection; `instrument_settings` accepts `channel_functions` and
+`ranges` for persistent per-channel choices. See the [channel/range contract and
+driver support](docs/instrument-ranges.md). Range controls are not output safety
+ratings and do not enable outputs.
+
 GATE (Gnome Automatic Test Equipment) is a background acquisition and control service for Ubuntu. Agents operate instruments through its authenticated local HTTP API. The human-facing GNOME top bar monitors readings and selects measurement functions; the main window only manages devices and GATE settings.
 
 ## Discover the running service
@@ -139,7 +146,7 @@ api.command('select_function', instrument=meter_id, function='FREQ')
 | `DIODE` | Diode test | V |
 | `CONT` | Continuity test | V |
 
-Selecting sends the driver's fixed mnemonic and checks `FUNC1?` before reporting success. It does not explicitly set trigger mode or range, alter calibration, or expose secondary-display controls. The meter's own function-change behavior may clear modifiers or its secondary display. A new conversion can take longer after a mode change; the first read gets a bounded longer timeout.
+Selecting sends the driver's fixed mnemonic and checks `FUNC1?` before reporting success. The function command does not set trigger mode, range or calibration, or expose secondary-display controls. After function confirmation, GATE reapplies an explicitly saved range for that function, if present. The meter's own function-change behavior may clear modifiers or its secondary display. A new conversion can take longer after a mode change; the first read gets a bounded longer timeout.
 
 After success, poll instrument state until `current_function` and the reading channel match the target. Do not relabel an old voltage sample as a new resistance reading. After the requested task, restore the original function if appropriate.
 

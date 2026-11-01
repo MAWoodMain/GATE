@@ -42,7 +42,9 @@ restored by GATE's normal profile handling.
 
 These share one exclusive primary measurement slot. Selection writes
 `SENS:FUNC` and confirms `SENS:FUNC?`; temperature also sets and confirms
-`UNIT:TEMP`. Range, integration, trigger, sensor type and sensor calibration
+`UNIT:TEMP`. GATE exposes model-specific manual ranges and autorange through its
+[common range interface](instrument-ranges.md). Without an explicit saved range,
+the meter's existing range is preserved. Integration, trigger, sensor type and sensor calibration
 remain instrument settings. Configure the appropriate RTD/thermistor/thermocouple
 on the meter before temperature acquisition. Kelvin is not exposed.
 Function changes can clear instrument math/secondary state according to the

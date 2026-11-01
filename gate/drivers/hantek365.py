@@ -66,6 +66,11 @@ def parse_packet(packet):
 
 
 class Hantek365:
+    range_unavailable_reason = 'Manual range selection is not yet verified for the Hantek USB protocol. Select ranges on the meter.'
+
+    def range_controls(self):
+        return []
+
     device_type = 'HANTEK:365'
     category = 'multimeter'
     simulated = False
