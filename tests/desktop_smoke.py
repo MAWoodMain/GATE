@@ -78,6 +78,10 @@ try:
             usb_fields = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
             read_usb = window.connection_fields('USB', 'hantek://usb/3-1', usb_fields)
             assert read_usb() == 'hantek://usb/3-1'
+            aoip_fields = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            aoip_address = 'aoip:///dev/serial/by-id/fixture?baud=19200&bits=7&parity=even&stop=2&flow=xonxoff&idle=0.4'
+            read_aoip = window.connection_fields('Serial', aoip_address, aoip_fields)
+            assert read_aoip() == aoip_address, 'AOIP connection edits must preserve protocol and framing'
             dialog = window.edit_connection('Serial', 'serial:///dev/ttyUSB9?baud=9600')
             dialogs.append(dialog)
             entry = dialog.get_content_area().get_first_child().get_next_sibling()

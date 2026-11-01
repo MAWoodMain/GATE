@@ -382,7 +382,7 @@ class Engine:
                 else:
                     self.experiment_run.finish('cancelled', 'Equipment configuration changed')
                 self.publish_experiment()
-            elif action in ('settings', 'scan', 'connect', 'query', 'write', 'static', 'sweep', 'output',
+            elif action in ('settings', 'scan', 'connect', 'query', 'write', 'source', 'static', 'sweep', 'output',
                             'cancel_sweep', 'select_function', 'select_range', 'display_measurements', 'instrument_settings',
                             'copy_settings', 'start_experiment', 'start_experiment_sequence', 'demo_experiment'):
                 raise ValueError('Stop the active experiment before changing equipment or acquisition settings')
@@ -699,10 +699,19 @@ class Engine:
                 self.recorder.close()
                 self.recorder = None
             self.state["recording"] = False
+        elif action == 'source':
+            instrument = self.instruments[self.resolve(args['instrument'])]
+            if not callable(getattr(instrument, 'configure_source', None)):
+                raise ValueError('This driver has no typed source configuration')
+            instrument.configure_source(args['quantity'], args['value'], args['range'])
+            if self.recorder:
+                self.recorder.event(time.monotonic_ns()-self.origin, instrument.id, f'source: {args}')
         elif action in ("static", "sweep", "output", "cancel_sweep"):
             instrument = self.instruments[self.resolve(args["instrument"])]
-            if instrument.category != "power_supply" or not (instrument.simulated or getattr(instrument, "output_control_supported", False)):
+            if not (instrument.simulated and instrument.category == "power_supply" or getattr(instrument, "output_control_supported", False)):
                 raise ValueError("This driver has no verified output control")
+            if action != 'output' and instrument.category != 'power_supply':
+                raise ValueError('Use the typed source command for calibrators; PSU sweeps are unsupported')
             maximum = getattr(instrument, "experiment_limits", {}).get("voltage", [0., 30.])[1]
             if action == "static":
                 voltage = float(args["voltage"])
@@ -782,6 +791,7 @@ class Engine:
                               output_control_supported=bool(getattr(instrument, "output_control_supported", False) or instrument.simulated and instrument.category == "power_supply"),
                               experiment_control_supported=bool(getattr(instrument, 'experiment_control_supported', False)),
                               experiment_limits=copy.deepcopy(getattr(instrument, 'experiment_limits', {})),
+                              source_controls=copy.deepcopy(getattr(instrument, 'source_controls', {})),
                               range_controls=range_catalog(instrument),
                               channels=channel_catalog(instrument, self.functions(instrument, readings)),
                               current_functions=current_functions(instrument),

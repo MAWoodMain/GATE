@@ -131,6 +131,7 @@ hardware changes accepted before a later failure are not transactional.
 | Siglent SDS1202X-E | Independent C1/C2 input scales, 500 µV/div–10 V/div in 1–2–5 steps, before probe attenuation. Existing attenuation is accounted for and preserved. Capture ownership blocks range changes. |
 | Hantek 365 | Explicitly unavailable: independent manual range selection is not verified for the USB protocol. Existing function and mA/A-terminal selection remain available. |
 | Simulated multimeter | Autorange and 0.1/1/10/100 V; insufficient fixed range produces overload. |
+| AOIP PJ-6301 | Input voltage and resistance manual/Auto ranges and fixed current range, preserving stored wiring/sensor settings. Source ranges use the separate standby-only `source` action. SN-8310 exposes source only. See [AOIP](aoip.md). |
 | Other simulations | Empty catalog with fixed-range explanation. Output operating envelopes remain separate. |
 
 The new controls are protocol-fixture tested, not bench-verified. Hardware
