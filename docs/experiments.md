@@ -27,7 +27,7 @@ Use **Instruments → Add Secondary Measurements…** for optional DUT/ambient t
 
 ## JSON tests, metrics and presentation
 
-Tests now use [declarative schema version 1](test-spec.md). The table below describes bundled JSON starting examples, not hard-coded runner procedures. You can edit sweeps, calculations, checks and charts through **Parameters → Edit Test JSON…**, and new tests have a JSON specification editor in the creation form. Custom numeric parameters automatically become form fields.
+Tests use [declarative schema version 1](test-spec.md). The table below describes bundled JSON starting examples, not hard-coded runner procedures. Use **Parameters → Edit Test…** for the guided test builder; **Testing** edits execution and **Output visualization** edits charts/tables. **Advanced JSON** remains available for direct specification editing. The same builder appears under **New Experiment → Tests**. Custom numeric parameters automatically become form fields.
 
 ### Bundled examples
 
@@ -63,7 +63,7 @@ Choose **New Experiment…** in the sidebar:
 1. **Overview**: name, purpose, DUT and comma-separated terminal names, or load the buck converter example.
 2. **Equipment**: add named roles, their terminals, and functional requirements.
 3. **Wiring**: use terminal pickers to connect declared endpoints. Every terminal must participate. Removed endpoints must be chosen again.
-4. **Tests**: give each test a name and description, then edit its JSON specification or load a starting template. Equipment role identifiers shown in the form are the identifiers used by controls and measurements.
+4. **Tests**: give each test a name and description, then use the test builder or load a starting template. **Advanced JSON** supports direct specification edits; load that JSON into the builder before saving. Equipment role identifiers shown in the form are the identifiers used by controls and measurements.
 
 **Create** validates and saves through the service. Errors retain the draft. Success opens the new page; **Cancel** discards the draft. Display names may repeat, but each new definition receives a unique ID.
 
@@ -96,6 +96,24 @@ To queue multiple tests, use `start_experiment_sequence` instead of `start_exper
 Definitions contain `id`, `name`, `description`, `dut`, `roles`, `connections` and `tests`. Equipment roles contain `name`, `capabilities` and `terminals`. Connections join declared `component.terminal` endpoints, reserving `dut` for the DUT. Test values use the [versioned JSON test contract](test-spec.md), including their own parameter, sweep, measurement, calculation and rendering definitions. Legacy `{description, procedure}` objects and string descriptions are converted to schema version 1 on load/save. Unknown fields, references and expression syntax are rejected; descriptions are never evaluated as code. The structural JSON Schema is bundled at `gate/templates/test-v1.schema.json`.
 
 ## Driver contract
+
+### Channel and range boundary
+
+The [instrument channel/range interface](instrument-ranges.md) does not change
+existing experiment JSON. Scalar `channel` fields are reading keys, while
+`quantity` uses the driver's `experiment_channels` mapping. Neither configures a
+meter function or range. Configure those before starting a run; schema-v1 tests
+have no channel/function/range setup block, and run metadata does not yet retain
+a complete applied-function/range snapshot. Auto defaults in the top bar are
+display-selection preferences, not a per-experiment default.
+
+Mandatory equipment roles require distinct instrument IDs; optional observation
+roles can reuse one. Channel-specific role bindings and output controls are not
+implemented, so separate source/measurement channels of one SMU cannot yet fill
+two mandatory roles. The generic channel catalog supports such devices, but this
+does not imply an SMU hardware driver or channel-aware experiment execution.
+
+### Verified output controls
 
 `experiment_capabilities` is a collection of stable functional identifiers. `measure.scalar` means the driver's current `read()` channels can be captured; it does not promise every selectable function at once. Existing Fluke and Siglent drivers expose this passive capability. DC converter roles use `source.dc_voltage`, `sink.dc_current`, `measure.dc_voltage` and `measure.dc_current`.
 
