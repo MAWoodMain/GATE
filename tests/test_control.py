@@ -77,6 +77,19 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
         self.assertNotIn('custom_converter', self.request('/v1/experiments')[1]['experiments'])
 
+    def test_generic_range_api(self):
+        _, meter = self.request('/v1/instruments/demo%3Amultimeter')
+        self.assertEqual(meter['range_controls'][0]['id'], 'voltage_dc')
+        _, accepted = self.request('/v1/commands', dict(action='select_range', instrument='demo:multimeter',
+                                                       control='voltage_dc', range='1'))
+        self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')
+        self.wait(lambda: self.request('/v1/instruments/demo%3Amultimeter')[1]['readings'][0]['quality'] == 'overload')
+        _, accepted = self.request('/v1/commands', dict(action='select_range', instrument='demo:multimeter',
+                                                       control='voltage_dc', range='invalid'))
+        self.assertEqual(self.completed(accepted['id'])['state'], 'failed')
+        _, meter = self.request('/v1/instruments/demo%3Amultimeter')
+        self.assertEqual(meter['settings']['ranges'], {'voltage_dc': '1'})
+
     def test_experiment_run_commands_and_history_endpoint(self):
         _, accepted = self.request('/v1/commands', dict(action='demo_experiment'))
         self.assertEqual(self.completed(accepted['id'])['state'], 'succeeded')

@@ -149,6 +149,63 @@ try:
             window.command.reset_mock()
             next(child for child in children if isinstance(child, Gtk.Button) and child.get_label() == 'Save Instrument Settings').emit('clicked')
             window.command.assert_called_once_with('instrument_settings', instrument='instrument:A', name='Bench reference', settings={'function':'FREQ', 'display_functions':['FREQ']})
+            # Generic selectors use driver catalogs, track the chosen function,
+            # preserve saved overrides and distinguish keep-current from auto.
+            from gate.ranges import range_catalog
+            from gate.drivers.fluke45 import Fluke45
+            from types import SimpleNamespace
+            profile['range_controls'] = range_catalog(Fluke45(SimpleNamespace(resource=address), profile['identity']))
+            profile['settings']['ranges'] = {'FREQ': '2'}
+            range_dialog = window.device_settings(address)
+            dialogs.append(range_dialog)
+            page = range_dialog.get_content_area().get_first_child().get_nth_page(1)
+            rows, direct = [], []
+            child = page.get_first_child()
+            while child:
+                direct.append(child)
+                if isinstance(child, Gtk.Box):
+                    label = child.get_first_child()
+                    selector = label.get_next_sibling() if isinstance(label, Gtk.Label) else None
+                    if isinstance(selector, Gtk.DropDown):
+                        rows.append((label.get_text(), child, selector))
+                child = child.get_next_sibling()
+            frequency = next(item for item in rows if item[0].startswith('Frequency'))
+            voltage = next(item for item in rows if item[0].startswith('DC voltage'))
+            assert frequency[1].get_visible() and not voltage[1].get_visible()
+            assert frequency[2].get_selected() == 3
+            frequency[2].set_selected(1)  # Autorange, distinct from keep-current.
+            window.command.reset_mock()
+            next(child for child in direct if isinstance(child, Gtk.Button) and child.get_label() == 'Save Instrument Settings').emit('clicked')
+            window.command.assert_called_once_with('instrument_settings', instrument='instrument:A', name='Reference',
+                settings={'function':'FREQ', 'display_functions':['FREQ'], 'ranges':{'FREQ':'auto'}})
+            from dataclasses import asdict
+            from gate.channels import channel_catalog
+            from test_ranges import MultiChannelInstrument
+            multi = MultiChannelInstrument()
+            multi_settings = dict(channel_functions={'source': 'source.current', 'measure': 'measure.voltage'},
+                                  ranges={'source.current.range': '10', 'measure.voltage.range': '1000'})
+            multi_profile = dict(profile, type='Fixture:SMU', settings=multi_settings,
+                functions=[asdict(item) for item in multi.functions()], channels=channel_catalog(multi),
+                range_controls=range_catalog(multi))
+            window.view_state['instrument_profiles']['instrument:A'] = multi_profile
+            multi_dialog = window.device_settings(address)
+            dialogs.append(multi_dialog)
+            page = multi_dialog.get_content_area().get_first_child().get_nth_page(1)
+            children = []
+            child = page.get_first_child()
+            while child:
+                children.append(child)
+                child = child.get_next_sibling()
+            function_selectors = [child for child in children if isinstance(child, Gtk.DropDown)]
+            assert len(function_selectors) == 2
+            assert [selector.get_selected() for selector in function_selectors] == [2, 1]
+            function_selectors[1].set_selected(2)  # Measurement resistance; source stays current.
+            assert function_selectors[0].get_selected() == 2
+            window.command.reset_mock()
+            next(child for child in children if isinstance(child, Gtk.Button) and child.get_label() == 'Save Instrument Settings').emit('clicked')
+            window.command.assert_called_once_with('instrument_settings', instrument='instrument:A', name='Reference',
+                settings=dict(channel_functions={'source':'source.current', 'measure':'measure.resistance'}, ranges=multi_settings['ranges']))
+            window.view_state['instrument_profiles']['instrument:A'] = profile
             copy_dialog = window.device_settings(address)
             dialogs.append(copy_dialog)
             page = copy_dialog.get_content_area().get_first_child().get_nth_page(1)

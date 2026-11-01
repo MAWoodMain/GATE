@@ -1,7 +1,8 @@
 """Fluke 45 display acquisition; preserves front-panel settings."""
 import math
 import re
-from gate.model import Reading, MeasurementFunction
+from gate.model import Reading, MeasurementFunction, RangeControl, RangeOption
+from gate.ranges import range_option
 
 FUNCTIONS = {
     'VDC': 'V', 'VAC': 'V', 'VACDC': 'V', 'ADC': 'A', 'AAC': 'A',
@@ -56,6 +57,44 @@ class Fluke45:
         # Primary display only. Secondary display readings remain passive.
         return [MeasurementFunction(code, FUNCTION_LABELS[code], f'primary.{code}', unit, True, 'primary')
                 for code, unit in FUNCTIONS.items()]
+
+    def range_controls(self):
+        # Range codes have rate-dependent full scales (manual tables 5-13A/B).
+        voltage = ['100 mV / 300 mV', '1 V / 3 V', '10 V / 30 V', '100 V / 300 V']
+        ohms = ['100 Ω / 300 Ω', '1 kΩ / 3 kΩ', '10 kΩ / 30 kΩ',
+                '100 kΩ / 300 kΩ', '1 MΩ / 3 MΩ', '10 MΩ / 30 MΩ', '100 MΩ / 300 MΩ']
+        labels = {key: voltage + ['1000 V DC / 750 V AC'] for key in ('VDC', 'VAC', 'VACDC')}
+        labels.update({key: ['10 mA / 30 mA', '100 mA', '10 A'] for key in ('ADC', 'AAC', 'AACDC')})
+        labels['OHMS'] = ohms
+        labels['FREQ'] = ['1 kHz', '10 kHz', '100 kHz', '1000 kHz', '1 MHz']
+        return [RangeControl(key, FUNCTION_LABELS[key]+' (slow / medium-fast)', FUNCTIONS[key],
+                tuple([RangeOption('auto', 'Autorange', automatic=True)] +
+                      [RangeOption(str(index), f'Range {index}: {label}') for index, label in enumerate(items, 1)]), key)
+                for key, items in labels.items()]
+
+    def range_function(self):
+        self.current_function = self.transport.query('FUNC1?').strip().upper()
+        return self.current_function
+
+    def range_functions(self):
+        return {'primary': self.range_function()}
+
+    def select_range(self, control_id, option_id):
+        control, option = range_option(self, control_id, option_id)
+        if self.range_function() != control.function:
+            raise ValueError('Select the matching primary function before its range')
+        if option.automatic:
+            self.transport.query('AUTO')
+        else:
+            self.transport.query('FIXED')
+            self.transport.query('RANGE '+option.id)
+        automatic = self.transport.query('AUTO?').strip()
+        confirmed = automatic == ('1' if option.automatic else '0')
+        if not option.automatic:
+            confirmed &= self.transport.query('RANGE1?').strip() == option.id
+        if self.range_function() != control.function or not confirmed:
+            raise ValueError('Fluke 45 did not confirm the requested range')
+        self._settling = True
 
     def select_function(self, function):
         if function not in FUNCTIONS:

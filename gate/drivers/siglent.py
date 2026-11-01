@@ -3,6 +3,7 @@ import math
 import re
 import time
 from gate.model import Reading, MeasurementFunction
+from gate.ranges import numeric_control, range_option
 
 _NUMBER = re.compile(r"^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)([a-zA-Z%]*)$")
 
@@ -45,9 +46,32 @@ class SiglentSDS:
     def functions(self):
         labels = {"PKPK": "Peak-to-peak", "RMS": "RMS voltage", "FREQ": "Frequency"}
         return [MeasurementFunction(f"{channel}.{parameter}", f"{channel} · {labels[parameter]}",
-                                    f"{channel}.{parameter}", unit)
+                                    f"{channel}.{parameter}", unit, instrument_channel=channel)
                 for channel in ("C1", "C2")
                 for parameter, unit in (("PKPK", "V"), ("RMS", "V"), ("FREQ", "Hz"))]
+
+    def range_controls(self):
+        # Input-referred scale; the existing probe factor is retained.
+        scales = [.0005, .001, .002, .005, .01, .02, .05, .1, .2, .5, 1., 2., 5., 10.]
+        return [numeric_control(channel, channel+' input vertical scale (before probe factor)',
+                                'V/div', scales, automatic=False, instrument_channel=channel) for channel in ('C1', 'C2')]
+
+    def select_range(self, control_id, option_id):
+        control, option = range_option(self, control_id, option_id)
+        if self._waveform_requests:
+            raise ValueError('Finish waveform capture before changing vertical scale')
+        command = control.id+':VDIV'
+        def attenuation():
+            value = float(self.transport.query(control.id+':ATTN?').strip().split()[-1])
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError('Invalid probe attenuation')
+            return value
+        factor = attenuation()
+        desired = option.value*factor
+        self.transport.write(command+' '+format(desired, '.12g')+'V')
+        actual = waveform_scalar(self.transport.query(command+'?'), 'voltage')
+        if attenuation() != factor or not math.isclose(actual, desired, rel_tol=1e-6, abs_tol=0.):
+            raise ValueError('Scope did not confirm the requested vertical scale')
 
     def channel_state(self, channel):
         state = self.transport.query(channel+':TRA?').strip().split()[-1].upper()

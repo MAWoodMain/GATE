@@ -1,6 +1,7 @@
 import math
 import time
 from gate.model import Reading, MeasurementFunction, DEFAULT_TEMPERATURE_UNIT
+from gate.ranges import numeric_control, range_option
 
 class Simulated:
     simulated = True
@@ -13,6 +14,17 @@ class Simulated:
         self.name = "SIMULATED · " + category.replace("_", " ").title()
         self.voltage = 0.0
         self.enabled = False
+        self.selected_range = 'auto'
+
+    range_unavailable_reason = 'This simulated instrument has fixed measurement ranges.'
+
+    def range_controls(self):
+        return ([numeric_control('voltage_dc', 'DC voltage', 'V', [.1, 1., 10., 100.])]
+                if self.category == 'multimeter' else [])
+
+    def select_range(self, control_id, option_id):
+        range_option(self, control_id, option_id)
+        self.selected_range = option_id
     def functions(self):
         channels = {
             'multimeter': [('voltage_dc', 'DC voltage', 'V')],
@@ -20,7 +32,9 @@ class Simulated:
                              ('voltage', 'Voltage', 'V'), ('current', 'Current', 'A')],
             'oscilloscope': [('C1.PKPK', 'C1 · Peak-to-peak', 'V'), ('C1.FREQ', 'C1 · Frequency', 'Hz')],
         }
-        return [MeasurementFunction(channel, label, channel, unit) for channel, label, unit in channels[self.category]]
+        owner = 'C1' if self.category == 'oscilloscope' else 'output' if self.category == 'power_supply' else 'primary'
+        return [MeasurementFunction(channel, label, channel, unit, instrument_channel=owner)
+                for channel, label, unit in channels[self.category]]
 
     def read(self):
         wobble = math.sin(time.monotonic()) * 0.003
@@ -30,7 +44,9 @@ class Simulated:
                     Reading("voltage", self.voltage + wobble if self.enabled else 0., "V"),
                     Reading("current", self.voltage / 100 if self.enabled else 0., "A")]
         if self.category == "multimeter":
-            return [Reading("voltage_dc", 3.3 + wobble, "V")]
+            value = 3.3 + wobble
+            overload = self.selected_range != 'auto' and abs(value) > float(self.selected_range)
+            return [Reading("voltage_dc", None if overload else value, "V", 'overload' if overload else 'ok')]
         return [Reading("C1.PKPK", 2.0 + wobble, "V"), Reading("C1.FREQ", 1000., "Hz")]
     def set_voltage(self, voltage):
         if self.category != "power_supply" or not math.isfinite(voltage) or not 0 <= voltage <= 30:
@@ -78,7 +94,7 @@ class ConverterInstrument(Simulated):
         self.experiment_limits = dict(voltage=[0., 30.], current=[0., 5.], power_w=150.)
 
     def functions(self):
-        return [MeasurementFunction(key, label, key, unit) for key, label, unit in
+        return [MeasurementFunction(key, label, key, unit, instrument_channel='source' if key == 'output_enabled' else 'measure') for key, label, unit in
                 [('voltage', 'DC voltage', 'V'), ('current', 'DC current', 'A'),
                  ('output_enabled', 'Output enabled', '')]]
 
@@ -101,6 +117,11 @@ class ConverterInstrument(Simulated):
 
 
 class SimulatedThermometer:
+    range_unavailable_reason = 'The simulated thermometer has a fixed measurement range.'
+
+    def range_controls(self):
+        return []
+
     id = 'demo:temperatures'
     name = 'SIMULATED · DUT and ambient probes'
     category = 'thermometer'
@@ -110,7 +131,7 @@ class SimulatedThermometer:
     def __init__(self, bench):
         self.bench = bench
     def functions(self):
-        return [MeasurementFunction(key, label, key, DEFAULT_TEMPERATURE_UNIT) for key, label in
+        return [MeasurementFunction(key, label, key, DEFAULT_TEMPERATURE_UNIT, instrument_channel=key) for key, label in
                 [('dut_temperature', 'DUT temperature'), ('ambient_temperature', 'Ambient temperature')]]
     def read(self):
         voltage, current, input_current = self.bench.output()
@@ -122,6 +143,11 @@ class SimulatedThermometer:
 
 
 class SimulatedWaveformRecorder:
+    range_unavailable_reason = 'The synthetic recorder has no adjustable input range.'
+
+    def range_controls(self):
+        return []
+
     id = 'demo:waveforms'
     name = 'SIMULATED · Ripple and protection recorder'
     category = 'oscilloscope'
@@ -133,7 +159,7 @@ class SimulatedWaveformRecorder:
         self.bench = bench
         self.pending = {}
     def functions(self):
-        return [MeasurementFunction('voltage', 'Output voltage', 'voltage', 'V')]
+        return [MeasurementFunction('voltage', 'Output voltage', 'voltage', 'V', instrument_channel='C1')]
     def read(self):
         return [Reading('voltage', self.bench.output()[0], 'V')]
     def begin_waveform(self, request):
